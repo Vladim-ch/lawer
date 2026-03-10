@@ -1,6 +1,7 @@
 import { Response } from "express";
 import prisma from "../config/database";
 import { AppError } from "../middleware/errorHandler";
+import { runAgent } from "./agentService";
 
 export async function addMessage(
   conversationId: string,
@@ -50,9 +51,7 @@ export async function getMessages(conversationId: string, userId: string) {
 }
 
 /**
- * Stream an LLM response via SSE.
- * For MVP, this sends a simulated streamed response.
- * In production, this will proxy to Claude API or local LLM.
+ * Stream an LLM response via SSE using the ReAct agent loop.
  */
 export async function streamResponse(
   conversationId: string,
@@ -86,95 +85,91 @@ export async function streamResponse(
   });
 
   // Get conversation history for context
-  const messages = await prisma.message.findMany({
+  const history = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
     select: { role: true, content: true },
   });
 
-  // MVP: simulated LLM response
-  // TODO: Replace with actual LLM API call (Claude/local)
-  const assistantResponse = generateMvpResponse(userMessage, messages);
+  // Abort controller for client disconnect
+  const abortController = new AbortController();
+  res.on("close", () => abortController.abort());
 
-  // Stream the response token by token
-  const tokens = assistantResponse.split(" ");
-  let fullResponse = "";
+  try {
+    // Run the ReAct agent loop with SSE streaming
+    const fullResponse = await runAgent(
+      history,
+      {
+        onToken: (token) => {
+          if (!res.writableEnded) {
+            const data = JSON.stringify({ type: "token", content: token });
+            res.write(`data: ${data}\n\n`);
+          }
+        },
+        onToolCall: (toolName, args) => {
+          if (!res.writableEnded) {
+            const data = JSON.stringify({ type: "tool_call", tool: toolName, arguments: args });
+            res.write(`data: ${data}\n\n`);
+          }
+        },
+        onToolResult: (toolName, result) => {
+          if (!res.writableEnded) {
+            const data = JSON.stringify({ type: "tool_result", tool: toolName, success: !(result as any)?.error });
+            res.write(`data: ${data}\n\n`);
+          }
+        },
+        onDone: () => {},
+        onError: (error) => {
+          console.error("[Agent] Error:", error.message);
+          if (!res.writableEnded) {
+            const data = JSON.stringify({ type: "error", message: "Произошла ошибка при обработке запроса" });
+            res.write(`data: ${data}\n\n`);
+          }
+        },
+      },
+      abortController.signal,
+    );
 
-  for (let i = 0; i < tokens.length; i++) {
-    const token = (i > 0 ? " " : "") + tokens[i];
-    fullResponse += token;
-
-    const data = JSON.stringify({ type: "token", content: token });
-    res.write(`data: ${data}\n\n`);
-
-    // Simulate token generation delay
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  }
-
-  // Save assistant message
-  const assistantMsg = await prisma.message.create({
-    data: {
-      conversationId,
-      role: "assistant",
-      content: fullResponse,
-    },
-  });
-
-  // Update conversation title if it's the first exchange
-  const messageCount = await prisma.message.count({ where: { conversationId } });
-  if (messageCount <= 2) {
-    const title = userMessage.slice(0, 80) + (userMessage.length > 80 ? "..." : "");
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { title },
+    // Save assistant message
+    const assistantMsg = await prisma.message.create({
+      data: {
+        conversationId,
+        role: "assistant",
+        content: fullResponse,
+      },
     });
+
+    // Update conversation title if it's the first exchange
+    const messageCount = await prisma.message.count({ where: { conversationId } });
+    if (messageCount <= 2) {
+      const title = userMessage.slice(0, 80) + (userMessage.length > 80 ? "..." : "");
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { title },
+      });
+    }
+
+    // Send done event
+    if (!res.writableEnded) {
+      const doneData = JSON.stringify({
+        type: "done",
+        messageId: assistantMsg.id,
+      });
+      res.write(`data: ${doneData}\n\n`);
+    }
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      // Client disconnected, nothing to do
+      return;
+    }
+    console.error("[Stream] Error:", err);
+    if (!res.writableEnded) {
+      const data = JSON.stringify({ type: "error", message: "Произошла ошибка при обработке запроса" });
+      res.write(`data: ${data}\n\n`);
+    }
+  } finally {
+    if (!res.writableEnded) {
+      res.end();
+    }
   }
-
-  // Send done event
-  const doneData = JSON.stringify({
-    type: "done",
-    messageId: assistantMsg.id,
-  });
-  res.write(`data: ${doneData}\n\n`);
-  res.end();
-}
-
-function generateMvpResponse(
-  userMessage: string,
-  _history: Array<{ role: string; content: string }>,
-): string {
-  const lower = userMessage.toLowerCase();
-
-  if (lower.includes("договор") || lower.includes("контракт")) {
-    return (
-      "Я могу помочь вам с подготовкой договора. В рамках MVP доступны следующие типы:\n\n" +
-      "1. **Договор поставки** -- регулирует отношения по передаче товаров\n" +
-      "2. **Договор оказания услуг** -- для оформления отношений по оказанию услуг\n" +
-      "3. **NDA (соглашение о неразглашении)** -- для защиты конфиденциальной информации\n\n" +
-      "Укажите тип договора и основные параметры (стороны, предмет, сроки), и я подготовлю проект.\n\n" +
-      "*Обратите внимание: сгенерированный документ требует проверки юристом перед подписанием.*"
-    );
-  }
-
-  if (lower.includes("документ") || lower.includes("анализ") || lower.includes("загруз")) {
-    return (
-      "Для анализа документа загрузите файл в формате `.docx`, `.pdf`, `.txt` или `.rtf` " +
-      "через кнопку прикрепления файла.\n\n" +
-      "Я могу:\n" +
-      "- Составить **краткое резюме** документа\n" +
-      "- Выявить **ключевые условия** и обязательства сторон\n" +
-      "- Определить **потенциальные риски**\n" +
-      "- Проверить на соответствие **внутренним стандартам**\n\n" +
-      "Какой именно анализ вас интересует?"
-    );
-  }
-
-  return (
-    "Здравствуйте! Я -- AI-ассистент юридического отдела **Lawer**.\n\n" +
-    "Я могу помочь вам с:\n" +
-    "- **Анализом документов** -- загрузите файл для получения резюме и выявления рисков\n" +
-    "- **Генерацией договоров** -- создание типовых договоров по шаблонам\n" +
-    "- **Юридическими вопросами** -- ответы с опорой на законодательство РФ\n\n" +
-    "Чем могу помочь?"
-  );
 }
