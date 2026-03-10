@@ -1,6 +1,11 @@
+/// <reference types="node" />
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import mammoth from "mammoth";
+
+// @ts-ignore — pdf-parse has no type declarations
+import pdfParse from "pdf-parse";
 
 const server = new McpServer({
   name: "mcp-document-processor",
@@ -9,25 +14,108 @@ const server = new McpServer({
 
 /**
  * Tool: parse_document
- * Parses a document (PDF or DOCX) from base64 content and extracts plain text with metadata.
+ * Parses a document (PDF, DOCX, TXT, or RTF) from base64 content and extracts plain text with metadata.
  */
 server.tool(
   "parse_document",
-  "Parse a legal document (PDF or DOCX) from base64-encoded content. Returns extracted plain text and document metadata such as page count and word count. Use this tool when you need to read or analyze the contents of an uploaded document.",
+  "Parse a legal document (PDF, DOCX, TXT, or RTF) from base64-encoded content. Returns extracted plain text and document metadata such as page count, word count, and character count. Use this tool when you need to read or analyze the contents of an uploaded document.",
   {
     content: z
       .string()
       .describe("Base64-encoded file content of the document to parse"),
     fileType: z
-      .enum(["pdf", "docx"])
-      .describe("File format of the document: 'pdf' or 'docx'"),
+      .enum(["pdf", "docx", "txt", "rtf"])
+      .describe("File format of the document: 'pdf', 'docx', 'txt', or 'rtf'"),
   },
-  async (_params) => {
+  async ({ content, fileType }) => {
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(content, "base64");
+      // Validate that the input was actually valid base64 by re-encoding and comparing
+      if (buffer.toString("base64") !== content) {
+        throw new Error("Input is not valid base64");
+      }
+    } catch {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: "Invalid base64 content. Ensure the file content is properly base64-encoded.",
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    let text: string;
+    let pages: number | null = null;
+
+    try {
+      switch (fileType) {
+        case "pdf": {
+          const pdfData = await pdfParse(buffer);
+          text = pdfData.text;
+          pages = pdfData.numpages ?? null;
+          break;
+        }
+        case "docx": {
+          const result = await mammoth.extractRawText({ buffer });
+          text = result.value;
+          break;
+        }
+        case "txt":
+        case "rtf": {
+          text = buffer.toString("utf-8");
+          break;
+        }
+        default: {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  error: `Unsupported file type: '${fileType}'. Supported types: pdf, docx, txt, rtf.`,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: `Failed to parse ${fileType} document: ${message}`,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const wordCount = words.length;
+    const charCount = text.length;
+
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify({ status: "not_implemented" }),
+          text: JSON.stringify({
+            text,
+            metadata: {
+              fileType,
+              wordCount,
+              charCount,
+              pages,
+            },
+          }),
         },
       ],
     };
@@ -52,7 +140,7 @@ server.tool(
       )
       .describe("Array of document sections, each with a heading and body"),
   },
-  async (_params) => {
+  async ({ title: _title, sections: _sections }) => {
     return {
       content: [
         {
@@ -79,7 +167,7 @@ server.tool(
       .string()
       .describe("Full plain text of the second (modified) document"),
   },
-  async (_params) => {
+  async ({ textA: _textA, textB: _textB }) => {
     return {
       content: [
         {
