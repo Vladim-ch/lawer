@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiFetch, createSSEStream } from "@/lib/api";
+import { apiFetch, createSSEStream, SSECallbacks } from "@/lib/api";
 
 interface Message {
   id: string;
@@ -7,6 +7,11 @@ interface Message {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+}
+
+interface ToolStatus {
+  tool: string;
+  status: "calling" | "done" | "error";
 }
 
 interface Conversation {
@@ -24,6 +29,7 @@ interface ChatState {
   isLoadingConversations: boolean;
   isStreaming: boolean;
   streamingContent: string;
+  toolStatus: ToolStatus | null;
   abortController: AbortController | null;
 
   loadConversations: (token: string) => Promise<void>;
@@ -41,6 +47,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   isLoadingConversations: false,
   isStreaming: false,
   streamingContent: "",
+  toolStatus: null,
   abortController: null,
 
   loadConversations: async (token) => {
@@ -109,14 +116,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       streamingContent: "",
     }));
 
-    const controller = createSSEStream(
-      `/api/conversations/${convId}/messages`,
-      { content },
-      token,
-      (tokenContent) => {
+    const callbacks: SSECallbacks = {
+      onToken: (tokenContent) => {
         set((s) => ({ streamingContent: s.streamingContent + tokenContent }));
       },
-      (messageId) => {
+      onDone: (messageId) => {
         const finalContent = get().streamingContent;
         const assistantMsg: Message = {
           id: messageId,
@@ -129,15 +133,31 @@ export const useChatStore = create<ChatState>()((set, get) => ({
           messages: [...s.messages, assistantMsg],
           isStreaming: false,
           streamingContent: "",
+          toolStatus: null,
           abortController: null,
         }));
         // Reload conversations to get updated title
         get().loadConversations(token);
       },
-      (error) => {
+      onError: (error) => {
         console.error("SSE error:", error);
-        set({ isStreaming: false, streamingContent: "", abortController: null });
+        set({ isStreaming: false, streamingContent: "", toolStatus: null, abortController: null });
       },
+      onToolCall: (tool) => {
+        set({ toolStatus: { tool, status: "calling" } });
+      },
+      onToolResult: (tool, success) => {
+        set({ toolStatus: { tool, status: success ? "done" : "error" } });
+        // Clear tool status after a short delay
+        setTimeout(() => set({ toolStatus: null }), 1500);
+      },
+    };
+
+    const controller = createSSEStream(
+      `/api/conversations/${convId}/messages`,
+      { content },
+      token,
+      callbacks,
     );
 
     set({ abortController: controller });
@@ -160,10 +180,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         messages: [...s.messages, assistantMsg],
         isStreaming: false,
         streamingContent: "",
+        toolStatus: null,
         abortController: null,
       }));
     } else {
-      set({ isStreaming: false, streamingContent: "", abortController: null });
+      set({ isStreaming: false, streamingContent: "", toolStatus: null, abortController: null });
     }
   },
 }));

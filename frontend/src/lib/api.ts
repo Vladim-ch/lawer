@@ -35,14 +35,21 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return res.json();
 }
 
+export interface SSECallbacks {
+  onToken: (content: string) => void;
+  onDone: (messageId: string) => void;
+  onError: (error: string) => void;
+  onToolCall?: (tool: string, args: Record<string, unknown>) => void;
+  onToolResult?: (tool: string, success: boolean) => void;
+}
+
 export function createSSEStream(
   path: string,
   body: unknown,
   token: string,
-  onToken: (content: string) => void,
-  onDone: (messageId: string) => void,
-  onError: (error: string) => void,
+  callbacks: SSECallbacks,
 ): AbortController {
+  const { onToken, onDone, onError, onToolCall, onToolResult } = callbacks;
   const controller = new AbortController();
 
   fetch(`${API_URL}${path}`, {
@@ -86,6 +93,12 @@ export function createSSEStream(
                 onToken(data.content);
               } else if (data.type === "done") {
                 onDone(data.messageId);
+              } else if (data.type === "tool_call") {
+                onToolCall?.(data.tool, data.arguments);
+              } else if (data.type === "tool_result") {
+                onToolResult?.(data.tool, data.success);
+              } else if (data.type === "error") {
+                onError(data.message || "Ошибка");
               }
             } catch {
               // Skip malformed data
