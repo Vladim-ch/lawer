@@ -1,0 +1,26 @@
+{
+  "name": "mcp-document-processor",
+  "version": "0.1.0",
+  "description": "MCP server for legal document processing: parsing, docx generation, and comparison",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1",
+    "docx": "^9.4.1",
+    "diff": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3",
+    "@types/node": "^22.13.10",
+    "@types/diff": "^7.0.2"
+  }
+}
