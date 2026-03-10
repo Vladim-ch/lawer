@@ -15,6 +15,7 @@ import {
 
 // @ts-ignore — pdf-parse has no type declarations
 import pdfParse from "pdf-parse";
+import { diffWords } from "diff";
 
 const server = new McpServer({
   name: "mcp-document-processor",
@@ -331,15 +332,58 @@ server.tool(
       .string()
       .describe("Full plain text of the second (modified) document"),
   },
-  async ({ textA: _textA, textB: _textB }) => {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({ status: "not_implemented" }),
-        },
-      ],
-    };
+  async ({ textA, textB }) => {
+    try {
+      const changes = diffWords(textA, textB);
+
+      const additions: string[] = [];
+      const deletions: string[] = [];
+      const segments: Array<{ type: "added" | "removed" | "unchanged"; value: string }> = [];
+
+      for (const part of changes) {
+        if (part.added) {
+          additions.push(part.value);
+          segments.push({ type: "added", value: part.value });
+        } else if (part.removed) {
+          deletions.push(part.value);
+          segments.push({ type: "removed", value: part.value });
+        } else {
+          segments.push({ type: "unchanged", value: part.value });
+        }
+      }
+
+      const totalChanges = additions.length + deletions.length;
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              summary: {
+                totalChanges,
+                additions: additions.length,
+                deletions: deletions.length,
+                isIdentical: totalChanges === 0,
+              },
+              segments,
+            }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: `Failed to compare documents: ${message}`,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 );
 
