@@ -1,10 +1,14 @@
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { UserRole } from "@prisma/client";
 import prisma from "../config/database";
 import { AppError } from "../middleware/errorHandler";
 
 const BCRYPT_ROUNDS = 12;
-const DEFAULT_TEMP_PASSWORD = "changeme123";
+
+function generateTempPassword(): string {
+  return crypto.randomBytes(16).toString("base64url");
+}
 
 const USER_SELECT = {
   id: true,
@@ -90,8 +94,11 @@ export async function updateUser(id: string, input: UpdateUserInput) {
   if (input.email !== undefined) data.email = input.email;
   if (input.role !== undefined) data.role = input.role;
 
+  let tempPassword: string | undefined;
+
   if (input.resetPassword) {
-    data.passwordHash = await bcrypt.hash(DEFAULT_TEMP_PASSWORD, BCRYPT_ROUNDS);
+    tempPassword = generateTempPassword();
+    data.passwordHash = await bcrypt.hash(tempPassword, BCRYPT_ROUNDS);
     data.mustChangePassword = true;
   }
 
@@ -101,7 +108,7 @@ export async function updateUser(id: string, input: UpdateUserInput) {
     select: USER_SELECT,
   });
 
-  return updated;
+  return { ...updated, tempPassword };
 }
 
 export async function deleteUser(id: string, currentUserId: string) {

@@ -13,7 +13,12 @@ const loginSchema = z.object({
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Текущий пароль обязателен"),
-  newPassword: z.string().min(6, "Новый пароль должен содержать минимум 6 символов"),
+  newPassword: z
+    .string()
+    .min(8, "Пароль должен содержать минимум 8 символов")
+    .regex(/[A-Z]/, "Пароль должен содержать хотя бы одну заглавную букву")
+    .regex(/[a-z]/, "Пароль должен содержать хотя бы одну строчную букву")
+    .regex(/[0-9]/, "Пароль должен содержать хотя бы одну цифру"),
 });
 
 router.post("/login", validate(loginSchema), authController.login);

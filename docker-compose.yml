@@ -3,12 +3,9 @@ services:
     image: pgvector/pgvector:pg16
     container_name: lawer-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: lawer
-      POSTGRES_USER: lawer
-      POSTGRES_PASSWORD: lawer_secret
+    env_file: .env
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,12 +18,19 @@ services:
     image: redis:7-alpine
     container_name: lawer-redis
     restart: unless-stopped
+    env_file: .env
+    command:
+      - sh
+      - -c
+      - |
+        printf 'requirepass %s\nappendonly yes\n' "$$(printenv REDIS_PASSWORD)" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$(printenv REDIS_PASSWORD)\" ping | grep PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -36,16 +40,14 @@ services:
     container_name: lawer-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: lawer_minio
-      MINIO_ROOT_PASSWORD: lawer_minio_secret
+    env_file: .env
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -58,18 +60,9 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql://lawer:lawer_secret@postgres:5432/lawer?schema=public
-      REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
-      MINIO_ACCESS_KEY: lawer_minio
-      MINIO_SECRET_KEY: lawer_minio_secret
-      MINIO_BUCKET: lawer-documents
-      JWT_SECRET: change-me-in-production-use-strong-secret
-      JWT_EXPIRES_IN: 7d
-      BACKEND_PORT: "3001"
-      FRONTEND_URL: http://37.221.127.68:3000
+      NODE_ENV: production
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,13 +76,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://37.221.127.68:3001
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     container_name: lawer-frontend
     restart: unless-stopped
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://37.221.127.68:3001
+    env_file: .env
     depends_on:
       - backend
 

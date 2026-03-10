@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
 import { ensureBucket } from "./config/minio";
 import { errorHandler } from "./middleware/errorHandler";
@@ -9,9 +11,31 @@ import conversationRoutes from "./routes/conversations";
 
 const app = express();
 
+// Security headers
+app.use(helmet());
+
+// Rate limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много запросов, попробуйте позже" },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток входа, попробуйте позже" },
+});
+
+app.use(generalLimiter);
+
 // Middleware
 app.use(cors({ origin: env.frontendUrl, credentials: true }));
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 // Health check
 app.get("/api/health", (_req, res) => {
@@ -19,7 +43,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 // Routes
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/conversations", conversationRoutes);
 
