@@ -6,19 +6,18 @@ import { validate } from "../middleware/validate";
 
 const router = Router();
 
-const registerSchema = z.object({
-  email: z.string().email("Некорректный email"),
-  name: z.string().min(2, "Имя должно содержать минимум 2 символа"),
-  password: z.string().min(6, "Пароль должен содержать минимум 6 символов"),
-});
-
 const loginSchema = z.object({
   email: z.string().email("Некорректный email"),
   password: z.string().min(1, "Пароль обязателен"),
 });
 
-router.post("/register", validate(registerSchema), authController.register);
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Текущий пароль обязателен"),
+  newPassword: z.string().min(6, "Новый пароль должен содержать минимум 6 символов"),
+});
+
 router.post("/login", validate(loginSchema), authController.login);
 router.get("/profile", authMiddleware, authController.getProfile);
+router.post("/change-password", authMiddleware, validate(changePasswordSchema), authController.changePassword);
 
 export default router;

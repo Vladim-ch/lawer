@@ -4,6 +4,7 @@ import { env } from "./config/env";
 import { ensureBucket } from "./config/minio";
 import { errorHandler } from "./middleware/errorHandler";
 import authRoutes from "./routes/auth";
+import adminRoutes from "./routes/admin";
 import conversationRoutes from "./routes/conversations";
 
 const app = express();
@@ -19,6 +20,7 @@ app.get("/api/health", (_req, res) => {
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/conversations", conversationRoutes);
 
 // Error handler
