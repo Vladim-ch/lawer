@@ -8,14 +8,17 @@ import { Sidebar } from "@/components/Sidebar";
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const token = useAuthStore((s) => s.token);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
 
   useEffect(() => {
     if (!token) {
       router.replace("/login");
+    } else if (mustChangePassword) {
+      router.replace("/change-password");
     }
-  }, [token, router]);
+  }, [token, mustChangePassword, router]);
 
-  if (!token) return null;
+  if (!token || mustChangePassword) return null;
 
   return (
     <div className="flex h-screen overflow-hidden">

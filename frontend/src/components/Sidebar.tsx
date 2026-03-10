@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 
@@ -112,6 +113,26 @@ export function Sidebar() {
           </div>
         )}
       </div>
+
+      {/* Admin link */}
+      {user?.role === "admin" && (
+        <div className="px-3 pb-2">
+          <Link
+            href="/admin/users"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"
+              />
+            </svg>
+            Управление пользователями
+          </Link>
+        </div>
+      )}
 
       {/* User info */}
       <div className="p-3 border-t border-gray-700">

@@ -2,18 +2,23 @@
 
 import { useState, FormEvent, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useAuthStore } from "@/stores/authStore";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isLoading, error, token, clearError } = useAuthStore();
+  const { login, isLoading, error, token, mustChangePassword, clearError } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   useEffect(() => {
-    if (token) router.replace("/chat");
-  }, [token, router]);
+    if (token) {
+      if (mustChangePassword) {
+        router.replace("/change-password");
+      } else {
+        router.replace("/chat");
+      }
+    }
+  }, [token, mustChangePassword, router]);
 
   useEffect(() => {
     clearError();
@@ -76,13 +81,6 @@ export default function LoginPage() {
               {isLoading ? "Вход..." : "Войти"}
             </button>
           </form>
-
-          <p className="mt-4 text-center text-sm text-gray-600">
-            Нет аккаунта?{" "}
-            <Link href="/register" className="text-primary-600 hover:text-primary-700 font-medium">
-              Зарегистрироваться
-            </Link>
-          </p>
         </div>
       </div>
     </div>

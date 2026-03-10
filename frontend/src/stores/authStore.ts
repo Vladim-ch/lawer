@@ -12,10 +12,11 @@ interface User {
 interface AuthState {
   token: string | null;
   user: User | null;
+  mustChangePassword: boolean;
   isLoading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, name: string, password: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
 }
@@ -25,37 +26,45 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       token: null,
       user: null,
+      mustChangePassword: false,
       isLoading: false,
       error: null,
 
       login: async (email, password) => {
         set({ isLoading: true, error: null });
         try {
-          const data = await apiFetch<{ token: string; user: User }>("/api/auth/login", {
+          const data = await apiFetch<{ token: string; user: User; mustChangePassword: boolean }>("/api/auth/login", {
             method: "POST",
             body: { email, password },
           });
-          set({ token: data.token, user: data.user, isLoading: false });
+          set({
+            token: data.token,
+            user: data.user,
+            mustChangePassword: data.mustChangePassword ?? false,
+            isLoading: false,
+          });
         } catch (err) {
           set({ isLoading: false, error: (err as Error).message });
         }
       },
 
-      register: async (email, name, password) => {
+      changePassword: async (currentPassword, newPassword) => {
         set({ isLoading: true, error: null });
         try {
-          const data = await apiFetch<{ token: string; user: User }>("/api/auth/register", {
+          const token = get().token;
+          await apiFetch("/api/auth/change-password", {
             method: "POST",
-            body: { email, name, password },
+            body: { currentPassword, newPassword },
+            token: token || undefined,
           });
-          set({ token: data.token, user: data.user, isLoading: false });
+          set({ mustChangePassword: false, isLoading: false });
         } catch (err) {
           set({ isLoading: false, error: (err as Error).message });
         }
       },
 
       logout: () => {
-        set({ token: null, user: null });
+        set({ token: null, user: null, mustChangePassword: false });
       },
 
       clearError: () => {
@@ -64,7 +73,11 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "lawer-auth",
-      partialize: (state) => ({ token: state.token, user: state.user }),
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        mustChangePassword: state.mustChangePassword,
+      }),
     },
   ),
 );
