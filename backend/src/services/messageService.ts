@@ -2,6 +2,7 @@ import { Response } from "express";
 import prisma from "../config/database";
 import { AppError } from "../middleware/errorHandler";
 import { runAgent } from "./agentService";
+import { acquire, release, queuePosition } from "./llmQueue";
 
 export async function addMessage(
   conversationId: string,
@@ -115,6 +116,20 @@ export async function streamResponse(
   const abortController = new AbortController();
   res.on("close", () => abortController.abort());
 
+  // Acquire LLM slot (serializes concurrent requests)
+  const position = queuePosition();
+  if (position > 0 && !res.writableEnded) {
+    const data = JSON.stringify({ type: "queued", position });
+    res.write(`data: ${data}\n\n`);
+  }
+
+  try {
+    await acquire(abortController.signal);
+  } catch (err) {
+    if ((err as Error).name === "AbortError") return;
+    throw err;
+  }
+
   try {
     // Run the ReAct agent loop with SSE streaming
     const fullResponse = await runAgent(
@@ -195,6 +210,7 @@ export async function streamResponse(
       res.write(`data: ${data}\n\n`);
     }
   } finally {
+    release();
     if (!res.writableEnded) {
       res.end();
     }
