@@ -1,5 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
+import os from "os";
+import path from "path";
 import * as documentController from "../controllers/documentController";
 import { authMiddleware } from "../middleware/auth";
 
@@ -8,8 +10,8 @@ const router = Router();
 router.use(authMiddleware);
 
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  dest: path.join(os.tmpdir(), "lawer-uploads"),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
   fileFilter: (_req, file, cb) => {
     const allowed = [".pdf", ".docx", ".doc", ".txt", ".rtf"];
     const ext = "." + file.originalname.split(".").pop()?.toLowerCase();

@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import fs from "fs";
 import { Document } from "@prisma/client";
 import minioClient from "../config/minio";
 import { callTool } from "./mcpClient";
@@ -21,6 +22,8 @@ function getFileType(filename: string): string {
 
 /**
  * Upload file to MinIO, extract text via MCP parse_document, save to DB.
+ * With disk storage, file.path points to a temp file — streamed to MinIO,
+ * then read for MCP text extraction, and cleaned up afterwards.
  */
 export async function uploadDocument(
   userId: string,
@@ -29,48 +32,53 @@ export async function uploadDocument(
   const uniquePath = `documents/${userId}/${uuidv4()}_${file.originalname}`;
   const fileType = getFileType(file.originalname);
 
-  // Upload to MinIO
-  await minioClient.putObject(
-    env.minio.bucket,
-    uniquePath,
-    file.buffer,
-    file.size,
-    { "Content-Type": file.mimetype },
-  );
-
-  // Extract text via MCP
-  let contentText: string | null = null;
   try {
-    const base64 = file.buffer.toString("base64");
-    const response = await callTool("parse_document", {
-      content: base64,
-      fileType,
-    }) as { content?: Array<{ type: string; text: string }> };
-
-    if (response?.content?.[0]?.type === "text") {
-      const parsed = JSON.parse(response.content[0].text);
-      contentText = parsed.text || null;
-    }
-  } catch (err) {
-    console.warn(
-      `[DocumentService] Failed to extract text from "${file.originalname}":`,
-      (err as Error).message,
+    // Stream file to MinIO from disk (no full buffer in RAM)
+    await minioClient.putObject(
+      env.minio.bucket,
+      uniquePath,
+      fs.createReadStream(file.path),
+      file.size,
+      { "Content-Type": file.mimetype },
     );
+
+    // Extract text via MCP (read file to base64 for parse_document)
+    let contentText: string | null = null;
+    try {
+      const base64 = await fs.promises.readFile(file.path, { encoding: "base64" });
+      const response = await callTool("parse_document", {
+        content: base64,
+        fileType,
+      }) as { content?: Array<{ type: string; text: string }> };
+
+      if (response?.content?.[0]?.type === "text") {
+        const parsed = JSON.parse(response.content[0].text);
+        contentText = parsed.text || null;
+      }
+    } catch (err) {
+      console.warn(
+        `[DocumentService] Failed to extract text from "${file.originalname}":`,
+        (err as Error).message,
+      );
+    }
+
+    // Save to DB
+    const document = await prisma.document.create({
+      data: {
+        userId,
+        filename: file.originalname,
+        filePath: uniquePath,
+        fileType,
+        contentText,
+        fileSize: file.size,
+      },
+    });
+
+    return document;
+  } finally {
+    // Clean up temp file
+    fs.promises.unlink(file.path).catch(() => {});
   }
-
-  // Save to DB
-  const document = await prisma.document.create({
-    data: {
-      userId,
-      filename: file.originalname,
-      filePath: uniquePath,
-      fileType,
-      contentText,
-      fileSize: file.size,
-    },
-  });
-
-  return document;
 }
 
 /**
