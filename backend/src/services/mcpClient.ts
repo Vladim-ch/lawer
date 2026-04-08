@@ -36,6 +36,7 @@ const servers = new Map<string, McpServer>();
 const MCP_SERVERS: Record<string, string> = {
   "mcp-document-processor": join(__dirname, "../../mcp/mcp-document-processor/dist/index.js"),
   "mcp-template-engine": join(__dirname, "../../mcp/mcp-template-engine/dist/index.js"),
+  "mcp-law-database": join(__dirname, "../../mcp/mcp-law-database/dist/index.js"),
 };
 
 // Map tool names to their MCP server
@@ -48,6 +49,9 @@ const TOOL_SERVER_MAP: Record<string, string> = {
   create_template: "mcp-template-engine",
   fill_template: "mcp-template-engine",
   validate_template: "mcp-template-engine",
+  index_documents: "mcp-law-database",
+  search_law: "mcp-law-database",
+  get_document_text: "mcp-law-database",
 };
 
 function spawnServer(name: string): McpServer {
@@ -63,6 +67,10 @@ function spawnServer(name: string): McpServer {
   };
   if (name === "mcp-template-engine") {
     childEnv.DATABASE_URL = process.env.DATABASE_URL;
+  }
+  if (name === "mcp-law-database") {
+    childEnv.DATABASE_URL = process.env.DATABASE_URL;
+    childEnv.LAW_DOCS_PATH = process.env.LAW_DOCS_PATH;
   }
 
   const child = spawn("node", [scriptPath], {
