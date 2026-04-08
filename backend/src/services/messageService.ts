@@ -58,6 +58,7 @@ export async function streamResponse(
   userId: string,
   userMessage: string,
   res: Response,
+  attachments?: { documentId: string; filename: string }[],
 ): Promise<void> {
   // Verify conversation
   const conv = await prisma.conversation.findFirst({
@@ -67,12 +68,31 @@ export async function streamResponse(
     throw new AppError(404, "Диалог не найден");
   }
 
+  // Build full message with attachment context
+  const contextParts = [userMessage];
+  if (attachments?.length) {
+    for (const att of attachments) {
+      const doc = await prisma.document.findFirst({
+        where: { id: att.documentId, userId },
+      });
+      if (doc?.contentText) {
+        contextParts.push(
+          `\n\n[Прикреплённый документ "${doc.filename}"]\n${doc.contentText}`,
+        );
+      }
+    }
+  }
+  const fullMessage = contextParts.join("");
+
   // Save user message
   await prisma.message.create({
     data: {
       conversationId,
       role: "user",
-      content: userMessage,
+      content: fullMessage,
+      attachments: attachments
+        ? JSON.parse(JSON.stringify(attachments))
+        : undefined,
     },
   });
 

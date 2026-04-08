@@ -19,6 +19,14 @@ const updateSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, "Сообщение не может быть пустым"),
+  attachments: z
+    .array(
+      z.object({
+        documentId: z.string().uuid(),
+        filename: z.string(),
+      }),
+    )
+    .optional(),
 });
 
 // Conversations CRUD

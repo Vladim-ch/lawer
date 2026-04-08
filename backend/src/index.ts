@@ -8,6 +8,7 @@ import { errorHandler } from "./middleware/errorHandler";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import conversationRoutes from "./routes/conversations";
+import documentRoutes from "./routes/documents";
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/conversations", conversationRoutes);
+app.use("/api/documents", documentRoutes);
 
 // Error handler
 app.use(errorHandler);

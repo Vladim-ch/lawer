@@ -20,6 +20,7 @@ export async function stream(req: Request, res: Response, next: NextFunction) {
       req.user!.userId,
       req.body.content,
       res,
+      req.body.attachments,
     );
   } catch (err) {
     next(err);
