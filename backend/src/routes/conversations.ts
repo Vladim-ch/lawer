@@ -1,9 +1,18 @@
 import { Router } from "express";
 import { z } from "zod";
+import rateLimit from "express-rate-limit";
 import * as conversationController from "../controllers/conversationController";
 import * as messageController from "../controllers/messageController";
 import { authMiddleware } from "../middleware/auth";
 import { validate } from "../middleware/validate";
+
+const messageLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много сообщений, подождите минуту" },
+});
 
 const router = Router();
 
@@ -38,6 +47,6 @@ router.delete("/:id", conversationController.remove);
 
 // Messages
 router.get("/:conversationId/messages", messageController.list);
-router.post("/:conversationId/messages", validate(sendMessageSchema), messageController.stream);
+router.post("/:conversationId/messages", messageLimiter, validate(sendMessageSchema), messageController.stream);
 
 export default router;

@@ -16,15 +16,7 @@ const app = express();
 // Security headers
 app.use(helmet());
 
-// Rate limiting
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Слишком много запросов, попробуйте позже" },
-});
-
+// Rate limiting — per-route group, not global
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -33,7 +25,14 @@ const authLimiter = rateLimit({
   message: { error: "Слишком много попыток входа, попробуйте позже" },
 });
 
-app.use(generalLimiter);
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много запросов, попробуйте позже" },
+});
+
 
 // Middleware
 app.use(cors({ origin: env.frontendUrl, credentials: true }));
@@ -46,9 +45,9 @@ app.get("/api/health", (_req, res) => {
 
 // Routes
 app.use("/api/auth", authLimiter, authRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/conversations", conversationRoutes);
-app.use("/api/documents", documentRoutes);
+app.use("/api/admin", apiLimiter, adminRoutes);
+app.use("/api/conversations", apiLimiter, conversationRoutes);
+app.use("/api/documents", apiLimiter, documentRoutes);
 
 // Error handler
 app.use(errorHandler);
