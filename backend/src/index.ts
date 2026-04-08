@@ -4,6 +4,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
 import { ensureBucket } from "./config/minio";
+import { shutdownAll as shutdownMcp } from "./services/mcpClient";
 import { errorHandler } from "./middleware/errorHandler";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
@@ -69,3 +70,13 @@ async function start() {
 }
 
 start();
+
+// Graceful shutdown — kill MCP child processes on exit
+function shutdown() {
+  console.log("[Server] Shutting down...");
+  shutdownMcp();
+  process.exit(0);
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

@@ -56,9 +56,18 @@ function spawnServer(name: string): McpServer {
     throw new Error(`Unknown MCP server: ${name}`);
   }
 
+  // Only pass necessary env vars to child processes (least-privilege)
+  const childEnv: Record<string, string | undefined> = {
+    NODE_ENV: "production",
+    PATH: process.env.PATH,
+  };
+  if (name === "mcp-template-engine") {
+    childEnv.DATABASE_URL = process.env.DATABASE_URL;
+  }
+
   const child = spawn("node", [scriptPath], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, NODE_ENV: "production" },
+    env: childEnv,
   });
 
   const server: McpServer = {
