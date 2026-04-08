@@ -96,6 +96,9 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      LAW_DOCS_PATH: /data/law-documents
+    volumes:
+      - ${LAW_DOCS_HOST_PATH:-./law-documents}:/data/law-documents:ro
     depends_on:
       postgres:
         condition: service_healthy

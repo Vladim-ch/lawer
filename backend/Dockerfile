@@ -31,6 +31,14 @@ RUN npm install
 COPY mcp/mcp-template-engine/ .
 RUN npm run build
 
+WORKDIR /app/mcp/mcp-law-database
+
+COPY mcp/mcp-law-database/package.json mcp/mcp-law-database/package-lock.json* ./
+RUN npm install
+
+COPY mcp/mcp-law-database/ .
+RUN npm run build
+
 # ---- Production stage ----
 FROM node:20-alpine AS runner
 
@@ -56,6 +64,10 @@ COPY --from=base /app/mcp/mcp-document-processor/package.json ./mcp/mcp-document
 COPY --from=base /app/mcp/mcp-template-engine/dist ./mcp/mcp-template-engine/dist
 COPY --from=base /app/mcp/mcp-template-engine/node_modules ./mcp/mcp-template-engine/node_modules
 COPY --from=base /app/mcp/mcp-template-engine/package.json ./mcp/mcp-template-engine/package.json
+
+COPY --from=base /app/mcp/mcp-law-database/dist ./mcp/mcp-law-database/dist
+COPY --from=base /app/mcp/mcp-law-database/node_modules ./mcp/mcp-law-database/node_modules
+COPY --from=base /app/mcp/mcp-law-database/package.json ./mcp/mcp-law-database/package.json
 
 RUN chmod +x /app/docker-entrypoint.sh
 
