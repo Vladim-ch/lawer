@@ -27,6 +27,7 @@ const upload = multer({
 
 router.get("/", documentController.list);
 router.get("/:id", documentController.get);
+router.get("/:id/download", documentController.download);
 router.post("/upload", upload.single("file"), documentController.upload);
 
 export default router;

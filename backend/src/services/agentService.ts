@@ -5,7 +5,11 @@ import {
   LlmMessage,
 } from "./llmService";
 import { callTool, getAvailableTools } from "./mcpClient";
+import { saveGeneratedDocument } from "./documentService";
 import { env } from "../config/env";
+
+/** Tools that produce downloadable files */
+const FILE_PRODUCING_TOOLS = new Set(["generate_docx", "fill_template"]);
 
 const TOOL_CALL_REGEX = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/;
 
@@ -13,6 +17,7 @@ export interface AgentStreamCallbacks {
   onToken: (token: string) => void;
   onToolCall: (toolName: string, args: Record<string, unknown>) => void;
   onToolResult: (toolName: string, result: unknown) => void;
+  onFile: (documentId: string, filename: string) => void;
   onDone: (fullText: string) => void;
   onError: (error: Error) => void;
 }
@@ -54,6 +59,7 @@ function stripToolCall(text: string): string {
 export async function runAgent(
   history: Array<{ role: string; content: string }>,
   callbacks: AgentStreamCallbacks,
+  userId: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const messages = buildMessages(history);
@@ -100,6 +106,24 @@ export async function runAgent(
     }
 
     callbacks.onToolResult(toolCall.tool, toolResult);
+
+    // If the tool produces a file, save it to MinIO and emit file event
+    if (FILE_PRODUCING_TOOLS.has(toolCall.tool) && toolResult && !(toolResult as any)?.error) {
+      try {
+        const result = toolResult as { content?: Array<{ type: string; text: string }> };
+        const textContent = result?.content?.find((c) => c.type === "text");
+        if (textContent) {
+          const parsed = JSON.parse(textContent.text);
+          if (parsed.base64 && parsed.filename) {
+            const fileType = parsed.filename.split(".").pop()?.toLowerCase() || "docx";
+            const doc = await saveGeneratedDocument(userId, parsed.filename, parsed.base64, fileType);
+            callbacks.onFile(doc.id, doc.filename);
+          }
+        }
+      } catch (err) {
+        console.warn("[Agent] Failed to save generated file:", (err as Error).message);
+      }
+    }
 
     // Add assistant response (with tool call) and tool result to messages
     messages.push({

@@ -43,6 +43,9 @@ const TOOL_SERVER_MAP: Record<string, string> = {
   parse_document: "mcp-document-processor",
   generate_docx: "mcp-document-processor",
   compare_documents: "mcp-document-processor",
+  list_templates: "mcp-template-engine",
+  get_template: "mcp-template-engine",
+  create_template: "mcp-template-engine",
   fill_template: "mcp-template-engine",
   validate_template: "mcp-template-engine",
 };

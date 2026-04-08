@@ -2,6 +2,8 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import { CodeBlock } from "./CodeBlock";
 
 interface MessageBubbleProps {
   role: "user" | "assistant" | "system";
@@ -69,7 +71,24 @@ export function MessageBubble({ role, content, isStreaming, attachments }: Messa
           </div>
         ) : (
           <div className="markdown-content text-sm">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                pre({ children }) {
+                  return <pre>{children}</pre>;
+                },
+                code({ className, children, ...props }) {
+                  const isInline = !className && typeof children === "string" && !children.includes("\n");
+                  if (isInline) {
+                    return <code className={className} {...props}>{children}</code>;
+                  }
+                  return <CodeBlock className={className}>{children}</CodeBlock>;
+                },
+              }}
+            >
+              {content}
+            </ReactMarkdown>
             {isStreaming && (
               <span className="inline-block w-1.5 h-4 bg-primary-500 animate-pulse ml-0.5 align-text-bottom" />
             )}

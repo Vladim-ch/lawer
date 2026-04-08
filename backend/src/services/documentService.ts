@@ -100,3 +100,72 @@ export async function listDocuments(userId: string): Promise<Document[]> {
     orderBy: { createdAt: "desc" },
   });
 }
+
+/**
+ * Download file from MinIO by document id with ownership check.
+ * Returns a readable stream along with filename and content type.
+ */
+export async function downloadDocument(
+  documentId: string,
+  userId: string,
+): Promise<{ stream: import("stream").Readable; filename: string; contentType: string; fileSize: number | null }> {
+  const document = await getDocument(documentId, userId);
+
+  const CONTENT_TYPE_MAP: Record<string, string> = {
+    pdf: "application/pdf",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    doc: "application/msword",
+    txt: "text/plain; charset=utf-8",
+    rtf: "application/rtf",
+  };
+
+  const contentType = CONTENT_TYPE_MAP[document.fileType] || "application/octet-stream";
+  const stream = await minioClient.getObject(env.minio.bucket, document.filePath);
+
+  return {
+    stream,
+    filename: document.filename,
+    contentType,
+    fileSize: document.fileSize,
+  };
+}
+
+/**
+ * Save a generated file (from MCP tool result) to MinIO and create a Document record.
+ * Expects base64-encoded file content from the tool result.
+ */
+export async function saveGeneratedDocument(
+  userId: string,
+  filename: string,
+  base64Content: string,
+  fileType: string,
+): Promise<Document> {
+  const buffer = Buffer.from(base64Content, "base64");
+  const uniquePath = `documents/${userId}/${uuidv4()}_${filename}`;
+
+  const MIME_MAP: Record<string, string> = {
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pdf: "application/pdf",
+    txt: "text/plain",
+  };
+
+  await minioClient.putObject(
+    env.minio.bucket,
+    uniquePath,
+    buffer,
+    buffer.length,
+    { "Content-Type": MIME_MAP[fileType] || "application/octet-stream" },
+  );
+
+  const document = await prisma.document.create({
+    data: {
+      userId,
+      filename,
+      filePath: uniquePath,
+      fileType,
+      fileSize: buffer.length,
+    },
+  });
+
+  return document;
+}

@@ -2,11 +2,212 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import pg from "pg";
 
 const server = new McpServer({
   name: "mcp-template-engine",
   version: "0.1.0",
 });
+
+/* ------------------------------------------------------------------ */
+/*  Database helper — lazy singleton pool                             */
+/* ------------------------------------------------------------------ */
+
+let _pool: pg.Pool | null = null;
+
+function getPool(): pg.Pool {
+  if (!_pool) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error("DATABASE_URL environment variable is not set");
+    }
+    _pool = new pg.Pool({ connectionString, max: 3 });
+  }
+  return _pool;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tool: list_templates                                              */
+/* ------------------------------------------------------------------ */
+
+server.tool(
+  "list_templates",
+  "List available legal document templates from the database. Returns id, name, category, parameter schema, and creation date for each template. Optionally filter by category. Use this tool when the user asks what templates are available or wants to choose a template to fill.",
+  {
+    category: z
+      .string()
+      .optional()
+      .describe("Optional category filter, e.g. 'договор' or 'соглашение'"),
+  },
+  async ({ category }) => {
+    try {
+      const pool = getPool();
+      let query = `SELECT id, name, category, parameters, created_at FROM templates ORDER BY name`;
+      const values: string[] = [];
+
+      if (category) {
+        query = `SELECT id, name, category, parameters, created_at FROM templates WHERE category = $1 ORDER BY name`;
+        values.push(category);
+      }
+
+      const result = await pool.query(query, values);
+      const templates = result.rows.map((row: Record<string, unknown>) => ({
+        id: row.id,
+        name: row.name,
+        category: row.category,
+        parameters: row.parameters,
+        createdAt: row.created_at,
+      }));
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ templates, count: templates.length }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: `Failed to list templates: ${message}` }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/*  Tool: get_template                                                */
+/* ------------------------------------------------------------------ */
+
+server.tool(
+  "get_template",
+  "Retrieve a single template by ID, including its full body text. Use this tool to get the template body before calling fill_template.",
+  {
+    templateId: z.string().uuid().describe("UUID of the template to retrieve"),
+  },
+  async ({ templateId }) => {
+    try {
+      const pool = getPool();
+      const result = await pool.query(
+        `SELECT id, name, category, template_body, parameters, created_at FROM templates WHERE id = $1`,
+        [templateId]
+      );
+
+      if (result.rows.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: `Template not found: ${templateId}` }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const row = result.rows[0] as Record<string, unknown>;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              id: row.id,
+              name: row.name,
+              category: row.category,
+              templateBody: row.template_body,
+              parameters: row.parameters,
+              createdAt: row.created_at,
+            }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: `Failed to get template: ${message}` }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/*  Tool: create_template                                             */
+/* ------------------------------------------------------------------ */
+
+server.tool(
+  "create_template",
+  "Create a new legal document template and save it to the database. The template body must use {{placeholder}} syntax. Returns the created template record. Use this tool when the user wants to add a new reusable document template.",
+  {
+    name: z.string().describe("Template name, e.g. 'Договор поставки'"),
+    category: z.string().describe("Template category, e.g. 'договор' or 'соглашение'"),
+    templateBody: z
+      .string()
+      .describe("Full template text with {{placeholder}} markers"),
+    parameters: z
+      .array(
+        z.object({
+          name: z.string().describe("Placeholder name matching {{name}} in the body"),
+          description: z.string().describe("Human-readable description of this field"),
+          type: z
+            .enum(["string", "date", "number", "text"])
+            .describe("Data type hint for the field"),
+        })
+      )
+      .describe("Array of parameter definitions for each placeholder"),
+    createdBy: z.string().uuid().describe("UUID of the user creating the template"),
+  },
+  async ({ name, category, templateBody, parameters, createdBy }) => {
+    try {
+      const pool = getPool();
+      const result = await pool.query(
+        `INSERT INTO templates (id, name, category, template_body, parameters, created_by, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW(), NOW())
+         RETURNING id, name, category, created_at`,
+        [name, category, templateBody, JSON.stringify(parameters), createdBy]
+      );
+
+      const row = result.rows[0] as Record<string, unknown>;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              created: true,
+              id: row.id,
+              name: row.name,
+              category: row.category,
+              createdAt: row.created_at,
+            }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: `Failed to create template: ${message}` }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
 
 /**
  * Tool: fill_template
@@ -198,4 +399,10 @@ async function main(): Promise<void> {
 main().catch((error: unknown) => {
   console.error("[mcp-template-engine] Fatal error:", error);
   process.exit(1);
+});
+
+/* Graceful shutdown: close DB pool on exit */
+process.on("SIGTERM", () => {
+  if (_pool) _pool.end().catch(() => {});
+  process.exit(0);
 });

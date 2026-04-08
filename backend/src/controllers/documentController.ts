@@ -33,3 +33,33 @@ export async function get(req: Request, res: Response, next: NextFunction) {
     next(err);
   }
 }
+
+export async function download(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { stream, filename, contentType, fileSize } =
+      await documentService.downloadDocument(req.params.id, req.user!.userId);
+
+    // RFC 5987 encoding for non-ASCII filenames
+    const encodedFilename = encodeURIComponent(filename).replace(/['()]/g, escape);
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="document"; filename*=UTF-8''${encodedFilename}`,
+    );
+    if (fileSize) {
+      res.setHeader("Content-Length", fileSize);
+    }
+
+    stream.pipe(res);
+
+    stream.on("error", (err) => {
+      console.error("[Download] Stream error:", err.message);
+      if (!res.headersSent) {
+        next(new AppError(500, "Ошибка при скачивании файла"));
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+}

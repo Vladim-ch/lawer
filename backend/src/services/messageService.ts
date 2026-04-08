@@ -138,6 +138,12 @@ export async function streamResponse(
             res.write(`data: ${data}\n\n`);
           }
         },
+        onFile: (documentId, filename) => {
+          if (!res.writableEnded) {
+            const data = JSON.stringify({ type: "file", documentId, filename });
+            res.write(`data: ${data}\n\n`);
+          }
+        },
         onDone: () => {},
         onError: (error) => {
           console.error("[Agent] Error:", error.message);
@@ -147,6 +153,7 @@ export async function streamResponse(
           }
         },
       },
+      userId,
       abortController.signal,
     );
 
