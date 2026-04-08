@@ -7,6 +7,8 @@ export async function upload(req: Request, res: Response, next: NextFunction) {
     if (!req.file) {
       throw new AppError(400, "Файл не прикреплён");
     }
+    // Multer decodes Content-Disposition filename as latin1; re-decode as UTF-8
+    req.file.originalname = Buffer.from(req.file.originalname, "latin1").toString("utf8");
     const doc = await documentService.uploadDocument(req.user!.userId, req.file);
     res.status(201).json(doc);
   } catch (err) {
