@@ -35,6 +35,24 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return res.json();
 }
 
+export async function apiUpload<T>(path: string, file: File, token: string): Promise<T> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: "Ошибка загрузки файла" }));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
 export interface SSECallbacks {
   onToken: (content: string) => void;
   onDone: (messageId: string) => void;

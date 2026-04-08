@@ -23,9 +23,9 @@ export function ChatArea() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  const handleSend = async (content: string) => {
+  const handleSend = async (content: string, attachments?: { documentId: string; filename: string }[]) => {
     if (token) {
-      await sendMessage(content, token);
+      await sendMessage(content, token, attachments);
     }
   };
 
@@ -69,7 +69,7 @@ export function ChatArea() {
         </div>
 
         <div className="w-full max-w-2xl mt-8">
-          <ChatInput onSend={handleSend} disabled={isStreaming} />
+          <ChatInput onSend={handleSend} disabled={isStreaming} token={token!} />
         </div>
       </div>
     );
@@ -81,7 +81,7 @@ export function ChatArea() {
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
+            <MessageBubble key={msg.id} role={msg.role} content={msg.content} attachments={msg.attachments} />
           ))}
 
           {/* Streaming message */}
@@ -157,7 +157,7 @@ export function ChatArea() {
               </button>
             </div>
           )}
-          <ChatInput onSend={handleSend} disabled={isStreaming} />
+          <ChatInput onSend={handleSend} disabled={isStreaming} token={token!} />
         </div>
       </div>
     </div>

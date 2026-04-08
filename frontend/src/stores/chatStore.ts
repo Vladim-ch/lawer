@@ -6,6 +6,7 @@ interface Message {
   conversationId: string;
   role: "user" | "assistant" | "system";
   content: string;
+  attachments?: { documentId: string; filename: string }[];
   createdAt: string;
 }
 
@@ -36,7 +37,7 @@ interface ChatState {
   selectConversation: (id: string, token: string) => Promise<void>;
   createConversation: (token: string) => Promise<string>;
   deleteConversation: (id: string, token: string) => Promise<void>;
-  sendMessage: (content: string, token: string) => Promise<void>;
+  sendMessage: (content: string, token: string, attachments?: { documentId: string; filename: string }[]) => Promise<void>;
   stopStreaming: () => void;
 }
 
@@ -93,7 +94,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }));
   },
 
-  sendMessage: async (content, token) => {
+  sendMessage: async (content, token, attachments?) => {
     const state = get();
     let convId = state.activeConversationId;
 
@@ -107,6 +108,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       conversationId: convId,
       role: "user",
       content,
+      attachments: attachments || undefined,
       createdAt: new Date().toISOString(),
     };
 
@@ -155,7 +157,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     const controller = createSSEStream(
       `/api/conversations/${convId}/messages`,
-      { content },
+      { content, attachments },
       token,
       callbacks,
     );
