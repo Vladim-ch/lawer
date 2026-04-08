@@ -92,7 +92,7 @@ services:
     container_name: lawer-backend
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "4001:4001"
     env_file: .env
     environment:
       NODE_ENV: production
@@ -115,7 +115,7 @@ services:
     container_name: lawer-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "4000:4000"
     env_file: .env
     depends_on:
       - backend

@@ -32,7 +32,7 @@ function buildRedisUrl(): string {
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
-  port: parseInt(process.env.BACKEND_PORT || "3001", 10),
+  port: parseInt(process.env.BACKEND_PORT || "4001", 10),
   databaseUrl: buildDatabaseUrl(),
   redisUrl: buildRedisUrl(),
   jwt: {
@@ -46,7 +46,7 @@ export const env = {
     secretKey: requireEnv("MINIO_SECRET_KEY"),
     bucket: process.env.MINIO_BUCKET || "lawer-documents",
   },
-  frontendUrl: process.env.FRONTEND_URL || "http://localhost:3000",
+  frontendUrl: process.env.FRONTEND_URL || "http://localhost:4000",
   llm: {
     provider: process.env.LLM_PROVIDER || "ollama",
     ollamaUrl: process.env.OLLAMA_URL || "http://ollama:11434",

@@ -61,6 +61,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 
 USER appuser
 
-EXPOSE 3001
+EXPOSE 4001
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
