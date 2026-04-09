@@ -60,8 +60,8 @@ services:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    mem_limit: 1536m
-    cpus: 1.5
+    mem_limit: 6144m
+    cpus: 2
     environment:
       OLLAMA_NUM_PARALLEL: 1
       OLLAMA_MAX_LOADED_MODELS: 1
@@ -83,7 +83,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:1.5b"}'''
+      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:7b"}'''
 
   backend:
     build:

@@ -50,11 +50,11 @@ export const env = {
   llm: {
     provider: process.env.LLM_PROVIDER || "ollama",
     ollamaUrl: process.env.OLLAMA_URL || "http://ollama:11434",
-    ollamaModel: process.env.OLLAMA_MODEL || "qwen2.5:1.5b",
+    ollamaModel: process.env.OLLAMA_MODEL || "qwen2.5:7b",
     maxContext: parseInt(process.env.LLM_MAX_CONTEXT || "10", 10),
     temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.3"),
-    numCtx: parseInt(process.env.LLM_NUM_CTX || "2048", 10),
-    numPredict: parseInt(process.env.LLM_NUM_PREDICT || "1024", 10),
+    numCtx: parseInt(process.env.LLM_NUM_CTX || "16384", 10),
+    numPredict: parseInt(process.env.LLM_NUM_PREDICT || "2048", 10),
     maxToolIterations: parseInt(process.env.LLM_MAX_TOOL_ITERATIONS || "3", 10),
   },
 } as const;
