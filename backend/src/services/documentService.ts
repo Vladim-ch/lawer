@@ -10,7 +10,6 @@ import { AppError } from "../middleware/errorHandler";
 const FILE_TYPE_MAP: Record<string, string> = {
   ".pdf": "pdf",
   ".docx": "docx",
-  ".doc": "doc",
   ".txt": "txt",
   ".rtf": "rtf",
 };
@@ -42,18 +41,37 @@ export async function uploadDocument(
       { "Content-Type": file.mimetype },
     );
 
-    // Extract text via MCP (read file to base64 for parse_document)
+    // Extract text via MCP (read file to base64 for parse_document).
+    // On failure we keep contentText = null so the file is still uploaded
+    // and downloadable, but downstream code can detect the missing text.
     let contentText: string | null = null;
     try {
       const base64 = await fs.promises.readFile(file.path, { encoding: "base64" });
       const response = await callTool("parse_document", {
         content: base64,
         fileType,
-      }) as { content?: Array<{ type: string; text: string }> };
+      }) as {
+        content?: Array<{ type: string; text: string }>;
+        isError?: boolean;
+      };
 
-      if (response?.content?.[0]?.type === "text") {
+      if (response?.isError) {
+        const errBody = response?.content?.[0]?.text ?? "(no error body)";
+        console.warn(
+          `[DocumentService] parse_document returned error for "${file.originalname}" (${fileType}): ${errBody}`,
+        );
+      } else if (response?.content?.[0]?.type === "text") {
         const parsed = JSON.parse(response.content[0].text);
         contentText = parsed.text || null;
+        if (!contentText) {
+          console.warn(
+            `[DocumentService] parse_document returned empty text for "${file.originalname}" (${fileType})`,
+          );
+        }
+      } else {
+        console.warn(
+          `[DocumentService] Unexpected parse_document response for "${file.originalname}" (${fileType})`,
+        );
       }
     } catch (err) {
       console.warn(

@@ -76,9 +76,17 @@ export async function streamResponse(
       const doc = await prisma.document.findFirst({
         where: { id: att.documentId, userId },
       });
-      if (doc?.contentText) {
+      if (!doc) {
+        contextParts.push(`\n\n[Документ "${att.filename}" недоступен]`);
+        continue;
+      }
+      if (doc.contentText) {
         contextParts.push(
           `\n\n[Прикреплённый документ "${doc.filename}"]\n${doc.contentText}`,
+        );
+      } else {
+        contextParts.push(
+          `\n\n[Прикреплённый документ "${doc.filename}" (${doc.fileType.toUpperCase()}): текст не удалось извлечь автоматически. Сообщи пользователю об этом и предложи прислать текст договора сообщением или загрузить в другом формате (PDF/DOCX/TXT).]`,
         );
       }
     }
