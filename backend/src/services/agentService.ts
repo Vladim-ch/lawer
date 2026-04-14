@@ -11,7 +11,10 @@ import { env } from "../config/env";
 /** Tools that produce downloadable files */
 const FILE_PRODUCING_TOOLS = new Set(["generate_docx", "fill_template"]);
 
-const TOOL_CALL_REGEX = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/;
+// Matches both properly closed <tool_call>...</tool_call> and the common
+// case where the model forgets the closing tag — we take the JSON object
+// up to and including its matching closing brace.
+const TOOL_CALL_REGEX = /<tool_call>\s*(\{[\s\S]*?\})\s*(?:<\/tool_call>|$)/;
 
 export interface AgentStreamCallbacks {
   onToken: (token: string) => void;
@@ -46,7 +49,12 @@ function parseToolCall(text: string): ParsedToolCall | null {
  * Remove the tool_call tag from response text, returning the clean portion.
  */
 function stripToolCall(text: string): string {
-  return text.replace(/<tool_call>[\s\S]*?<\/tool_call>/, "").trim();
+  // Strip properly closed tags AND dangling <tool_call>...(eof) without
+  // closing tag (qwen2.5 sometimes omits it).
+  return text
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+    .replace(/<tool_call>[\s\S]*$/g, "")
+    .trim();
 }
 
 /**

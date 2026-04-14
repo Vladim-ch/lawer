@@ -18,5 +18,8 @@ export REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_H}:${REDIS_P}"
 echo "Running Prisma migrations..."
 npx prisma migrate deploy
 
+echo "Seeding database (idempotent — existing rows skipped)..."
+npx tsx prisma/seed.ts || echo "[warn] Seed failed, continuing startup"
+
 echo "Starting application..."
 exec node dist/index.js
