@@ -83,7 +83,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:7b"}'''
+      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:1.5b"}'''
 
   backend:
     build:
@@ -108,6 +108,8 @@ services:
         condition: service_started
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
 
   frontend:
     build:

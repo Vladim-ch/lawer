@@ -50,6 +50,7 @@ export async function streamChat(
     model: env.llm.ollamaModel,
     messages,
     stream: true,
+    keep_alive: -1,
     options: {
       temperature: env.llm.temperature,
       num_ctx: env.llm.numCtx,
@@ -146,6 +147,7 @@ export async function chatCompletion(
     model: env.llm.ollamaModel,
     messages,
     stream: false,
+    keep_alive: -1,
     options: {
       temperature: env.llm.temperature,
       num_ctx: env.llm.numCtx,
@@ -167,4 +169,45 @@ export async function chatCompletion(
 
   const data = await response.json();
   return data.message?.content || "";
+}
+
+/**
+ * Warm up Ollama: load model and populate KV cache for the system prompt.
+ * CPU-only prompt eval of 2–3k-token system prompt takes minutes cold;
+ * prefix caching makes subsequent requests fast, so we pay that cost once
+ * on startup (fire-and-forget, non-blocking).
+ */
+export async function warmUp(): Promise<void> {
+  const url = `${env.llm.ollamaUrl}/api/chat`;
+  const body = {
+    model: env.llm.ollamaModel,
+    stream: false,
+    keep_alive: -1,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: "ping" },
+    ],
+    options: {
+      temperature: 0,
+      num_ctx: env.llm.numCtx,
+      num_predict: 1,
+    },
+  };
+  const startedAt = Date.now();
+  console.log(`[LLM] Warming up ${env.llm.ollamaModel} (may take a few minutes on CPU)...`);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      console.warn(`[LLM] Warmup failed: HTTP ${r.status}`);
+      return;
+    }
+    await r.json();
+    console.log(`[LLM] Warmup complete in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  } catch (err) {
+    console.warn(`[LLM] Warmup error:`, (err as Error).message);
+  }
 }

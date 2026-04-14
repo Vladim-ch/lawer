@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
 import { ensureBucket } from "./config/minio";
 import { shutdownAll as shutdownMcp } from "./services/mcpClient";
+import { warmUp as warmUpLlm } from "./services/llmService";
 import { errorHandler } from "./middleware/errorHandler";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
@@ -61,6 +62,9 @@ async function start() {
 
     app.listen(env.port, () => {
       console.log(`Lawer backend running on port ${env.port}`);
+      // Fire-and-forget: prime Ollama KV cache with the system prompt so
+      // the first real user request does not pay the 3-minute cold prompt eval.
+      void warmUpLlm();
     });
   } catch (err) {
     console.error("Failed to start server:", err);
