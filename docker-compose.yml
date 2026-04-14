@@ -83,7 +83,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:1.5b"}'''
+      - 'curl -sf http://ollama:11434/api/pull -d ''{"name":"qwen2.5:3b"}'''
 
   backend:
     build:
