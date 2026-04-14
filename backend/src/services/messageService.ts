@@ -4,6 +4,19 @@ import { AppError } from "../middleware/errorHandler";
 import { runAgent } from "./agentService";
 import { acquire, release, queuePosition } from "./llmQueue";
 
+/**
+ * Detect whether a document looks like an unfilled template: long
+ * underscore runs, "{{placeholder}}" markers, or bracketed placeholders.
+ * Returning true triggers an explicit hint injected into the user turn,
+ * so even smaller models can't miss it.
+ */
+function looksLikeBlankTemplate(text: string): boolean {
+  const underscoreRuns = (text.match(/_{5,}/g) ?? []).length;
+  const curlyPlaceholders = (text.match(/\{\{[^}]{1,60}\}\}/g) ?? []).length;
+  const angleSlots = (text.match(/<[А-Яа-яA-Za-z][^<>]{1,40}>/g) ?? []).length;
+  return underscoreRuns + curlyPlaceholders + angleSlots >= 3;
+}
+
 export async function addMessage(
   conversationId: string,
   userId: string,
@@ -81,10 +94,14 @@ export async function streamResponse(
         continue;
       }
       if (doc.contentText) {
+        const trailingHint = looksLikeBlankTemplate(doc.contentText)
+          ? `\n\n[ВНИМАНИЕ: в документе много пустых полей (_____, {{...}}, <...>) — это **незаполненный шаблон**. ПЕРВОЙ строкой ответа напиши: «Документ — незаполненный шаблон». Не подставляй выдуманные ФИО, суммы, даты, реквизиты.]`
+          : "";
         contextParts.push(
           `\n\n=== ТЕКСТ ПРИКРЕПЛЁННОГО ПОЛЬЗОВАТЕЛЕМ ДОКУМЕНТА "${doc.filename}" ===\n` +
           `Важно: это реальное содержимое файла, извлечённое автоматически. НЕ отвечай "я не могу читать файлы" — текст уже перед тобой, анализируй его напрямую.\n` +
-          `--- НАЧАЛО ТЕКСТА ---\n${doc.contentText}\n--- КОНЕЦ ТЕКСТА ---`,
+          `--- НАЧАЛО ТЕКСТА ---\n${doc.contentText}\n--- КОНЕЦ ТЕКСТА ---` +
+          trailingHint,
         );
       } else {
         contextParts.push(
