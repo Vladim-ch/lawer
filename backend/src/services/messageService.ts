@@ -82,10 +82,31 @@ export async function streamResponse(
     throw new AppError(404, "Диалог не найден");
   }
 
+  // If the user did not attach anything in THIS turn but a previous turn
+  // in the same conversation did, carry the most recent document over so
+  // follow-up questions ("а какие риски?") still have the text to work
+  // on. Past user messages in DB no longer store inflated doc bodies.
+  const attachedThisTurn = !!attachments?.length;
+  let effectiveAttachments = attachments;
+  if (!effectiveAttachments?.length) {
+    const previousWithAttachment = await prisma.message.findFirst({
+      where: { conversationId, role: "user", attachments: { not: null as never } },
+      orderBy: { createdAt: "desc" },
+      select: { attachments: true },
+    });
+    const carried = previousWithAttachment?.attachments as
+      | { documentId: string; filename: string }[]
+      | null
+      | undefined;
+    if (carried?.length) {
+      effectiveAttachments = carried;
+    }
+  }
+
   // Build full message with attachment context
   const contextParts = [userMessage];
-  if (attachments?.length) {
-    for (const att of attachments) {
+  if (effectiveAttachments?.length) {
+    for (const att of effectiveAttachments) {
       const doc = await prisma.document.findFirst({
         where: { id: att.documentId, userId },
       });
@@ -94,7 +115,7 @@ export async function streamResponse(
         continue;
       }
       if (doc.contentText) {
-        const trailingHint = looksLikeBlankTemplate(doc.contentText)
+        const trailingHint = attachedThisTurn && looksLikeBlankTemplate(doc.contentText)
           ? `\n\n[ВНИМАНИЕ: в документе много пустых полей (_____, {{...}}, <...>) — это **незаполненный шаблон**. ПЕРВОЙ строкой ответа напиши: «Документ — незаполненный шаблон». Не подставляй выдуманные ФИО, суммы, даты, реквизиты.]`
           : "";
         contextParts.push(
@@ -113,12 +134,15 @@ export async function streamResponse(
   }
   const fullMessage = contextParts.join("");
 
-  // Save user message
+  // Save user message — store only the user-typed text + attachments JSON,
+  // not the inflated document body. Re-inflation only happens for the
+  // current turn (below), so history replies in the same conversation do
+  // not accumulate full document text and blow out num_ctx.
   await prisma.message.create({
     data: {
       conversationId,
       role: "user",
-      content: fullMessage,
+      content: userMessage,
       attachments: attachments
         ? JSON.parse(JSON.stringify(attachments))
         : undefined,
@@ -133,12 +157,17 @@ export async function streamResponse(
     "X-Accel-Buffering": "no",
   });
 
-  // Get conversation history for context
+  // Get conversation history for context. Past turns store only the raw
+  // user text; we inflate the CURRENT turn (the just-saved message) with
+  // the attachment body so the agent has the document to analyze now.
   const history = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
     select: { role: true, content: true },
   });
+  if (history.length > 0 && history[history.length - 1].role === "user") {
+    history[history.length - 1] = { role: "user", content: fullMessage };
+  }
 
   // Abort controller for client disconnect
   const abortController = new AbortController();
