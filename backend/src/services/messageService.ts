@@ -134,7 +134,11 @@ export async function streamResponse(
   try {
     await acquire(abortController.signal);
   } catch (err) {
-    if ((err as Error).name === "AbortError") return;
+    if ((err as Error).name === "AbortError") {
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    if (!res.writableEnded) res.end();
     throw err;
   }
 

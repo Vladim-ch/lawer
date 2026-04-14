@@ -14,7 +14,7 @@ interface ChatInputProps {
   token: string;
 }
 
-const ACCEPTED_TYPES = ".pdf,.docx,.doc,.txt,.rtf";
+const ACCEPTED_TYPES = ".pdf,.docx,.txt";
 
 export function ChatInput({ onSend, disabled, token }: ChatInputProps) {
   const [value, setValue] = useState("");

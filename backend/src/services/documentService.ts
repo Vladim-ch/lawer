@@ -11,7 +11,6 @@ const FILE_TYPE_MAP: Record<string, string> = {
   ".pdf": "pdf",
   ".docx": "docx",
   ".txt": "txt",
-  ".rtf": "rtf",
 };
 
 function getFileType(filename: string): string {
@@ -80,17 +79,29 @@ export async function uploadDocument(
       );
     }
 
-    // Save to DB
-    const document = await prisma.document.create({
-      data: {
-        userId,
-        filename: file.originalname,
-        filePath: uniquePath,
-        fileType,
-        contentText,
-        fileSize: file.size,
-      },
-    });
+    // Save to DB. If this fails, the file is already in MinIO — remove it
+    // so we don't leave an orphan object behind.
+    let document: Document;
+    try {
+      document = await prisma.document.create({
+        data: {
+          userId,
+          filename: file.originalname,
+          filePath: uniquePath,
+          fileType,
+          contentText,
+          fileSize: file.size,
+        },
+      });
+    } catch (dbErr) {
+      await minioClient.removeObject(env.minio.bucket, uniquePath).catch((cleanupErr) => {
+        console.warn(
+          `[DocumentService] Failed to remove orphan object "${uniquePath}":`,
+          (cleanupErr as Error).message,
+        );
+      });
+      throw dbErr;
+    }
 
     return document;
   } finally {
@@ -183,15 +194,24 @@ export async function saveGeneratedDocument(
     { "Content-Type": MIME_MAP[fileType] || "application/octet-stream" },
   );
 
-  const document = await prisma.document.create({
-    data: {
-      userId,
-      filename,
-      filePath: uniquePath,
-      fileType,
-      fileSize: buffer.length,
-    },
-  });
-
-  return document;
+  try {
+    const document = await prisma.document.create({
+      data: {
+        userId,
+        filename,
+        filePath: uniquePath,
+        fileType,
+        fileSize: buffer.length,
+      },
+    });
+    return document;
+  } catch (dbErr) {
+    await minioClient.removeObject(env.minio.bucket, uniquePath).catch((cleanupErr) => {
+      console.warn(
+        `[DocumentService] Failed to remove orphan generated object "${uniquePath}":`,
+        (cleanupErr as Error).message,
+      );
+    });
+    throw dbErr;
+  }
 }

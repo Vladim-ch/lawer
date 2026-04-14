@@ -50,6 +50,52 @@ function stripToolCall(text: string): string {
 }
 
 /**
+ * Streaming filter that hides `<tool_call>...</tool_call>` blocks from the
+ * token stream reaching the client. Handles tags split across chunks by
+ * holding back a small tail buffer.
+ */
+function createToolCallFilter(emit: (t: string) => void) {
+  const OPEN = "<tool_call>";
+  const CLOSE = "</tool_call>";
+  let buf = "";
+  let inside = false;
+  return {
+    push(chunk: string) {
+      buf += chunk;
+      while (buf.length > 0) {
+        if (inside) {
+          const ci = buf.indexOf(CLOSE);
+          if (ci === -1) {
+            buf = buf.slice(Math.max(0, buf.length - (CLOSE.length - 1)));
+            return;
+          }
+          buf = buf.slice(ci + CLOSE.length);
+          inside = false;
+          continue;
+        }
+        const oi = buf.indexOf(OPEN);
+        if (oi === -1) {
+          const safeLen = Math.max(0, buf.length - (OPEN.length - 1));
+          if (safeLen > 0) {
+            emit(buf.slice(0, safeLen));
+            buf = buf.slice(safeLen);
+          }
+          return;
+        }
+        if (oi > 0) emit(buf.slice(0, oi));
+        buf = buf.slice(oi + OPEN.length);
+        inside = true;
+      }
+    },
+    flush() {
+      if (!inside && buf.length > 0) emit(buf);
+      buf = "";
+      inside = false;
+    },
+  };
+}
+
+/**
  * Run the ReAct agent loop:
  * 1. Stream LLM response to user
  * 2. If response contains <tool_call>, execute it via MCP
@@ -67,16 +113,19 @@ export async function runAgent(
   let fullResponse = "";
   let iteration = 0;
 
-  // First iteration: stream to user
+  // First iteration: stream to user, but hide any <tool_call>...</tool_call>
+  // segments so the client never sees the raw tag in the chat bubble.
+  const firstFilter = createToolCallFilter(callbacks.onToken);
   const firstResponse = await streamChat(
     messages,
     {
-      onToken: callbacks.onToken,
+      onToken: (t) => firstFilter.push(t),
       onDone: () => {},
       onError: callbacks.onError,
     },
     signal,
   );
+  firstFilter.flush();
 
   fullResponse = firstResponse;
 
@@ -137,17 +186,20 @@ export async function runAgent(
 
     // Check if this is the last iteration — stream, otherwise use completion
     if (iteration >= env.llm.maxToolIterations) {
-      // Last iteration: stream final response
+      // Last iteration: stream final response (still filter tool_call in case
+      // the model emits one after hitting the iteration cap).
+      const lastFilter = createToolCallFilter(callbacks.onToken);
       const finalResponse = await streamChat(
         messages,
         {
-          onToken: callbacks.onToken,
+          onToken: (t) => lastFilter.push(t),
           onDone: () => {},
           onError: callbacks.onError,
         },
         signal,
       );
-      fullResponse = stripToolCall(fullResponse) + "\n\n" + finalResponse;
+      lastFilter.flush();
+      fullResponse = stripToolCall(fullResponse) + "\n\n" + stripToolCall(finalResponse);
       break;
     }
 
@@ -168,13 +220,15 @@ export async function runAgent(
     const separator = cleanPrevious ? "\n\n" : "";
     if (separator) callbacks.onToken(separator);
 
-    // Send the non-streamed response as a batch of tokens
+    // Send the non-streamed response as a batch of tokens, filtering tool_call
+    // tags in case the model emitted one despite us not continuing the loop.
+    const batchFilter = createToolCallFilter(callbacks.onToken);
     for (let i = 0; i < nextResponse.length; i += 20) {
-      const chunk = nextResponse.slice(i, i + 20);
-      callbacks.onToken(chunk);
+      batchFilter.push(nextResponse.slice(i, i + 20));
     }
+    batchFilter.flush();
 
-    fullResponse = (cleanPrevious ? cleanPrevious + separator : "") + nextResponse;
+    fullResponse = (cleanPrevious ? cleanPrevious + separator : "") + stripToolCall(nextResponse);
     toolCall = null;
   }
 

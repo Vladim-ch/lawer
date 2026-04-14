@@ -13,14 +13,14 @@ const upload = multer({
   dest: path.join(os.tmpdir(), "lawer-uploads"),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
   fileFilter: (_req, file, cb) => {
-    const allowed = [".pdf", ".docx", ".doc", ".txt", ".rtf"];
+    const allowed = [".pdf", ".docx", ".txt"];
     const ext = "." + file.originalname.split(".").pop()?.toLowerCase();
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
       cb(
         new Error(
-          "Неподдерживаемый формат файла. Допустимые: PDF, DOCX, TXT, RTF",
+          "Неподдерживаемый формат файла. Допустимые: PDF, DOCX, TXT",
         ),
       );
     }
