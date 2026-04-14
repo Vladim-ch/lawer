@@ -37,8 +37,13 @@ export function Sidebar() {
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (token && confirm("Удалить этот диалог?")) {
+    e.preventDefault();
+    if (!token) return;
+    try {
       await deleteConversation(id, token);
+    } catch (err) {
+      console.error("[Sidebar] delete failed:", err);
+      alert(`Не удалось удалить диалог: ${(err as Error).message}`);
     }
   };
 
@@ -96,8 +101,9 @@ export function Sidebar() {
                 <span className="flex-1 truncate">{conv.title}</span>
                 <button
                   onClick={(e) => handleDelete(e, conv.id)}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+                  className="shrink-0 p-1 text-gray-400 hover:text-red-400 opacity-60 hover:opacity-100 transition-opacity"
                   title="Удалить"
+                  aria-label="Удалить диалог"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
