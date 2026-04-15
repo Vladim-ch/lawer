@@ -209,6 +209,29 @@ export async function runAgent(
     }
   }
 
+  // Fallback: if after all iterations the model produced no user-facing
+  // text at all (e.g. it spent every turn calling tools that returned
+  // empty results and then gave up), force one final streaming call with
+  // tools disabled so the user always gets a real answer.
+  if (!accumulatedText.trim()) {
+    messages.push({
+      role: "user",
+      content:
+        "Инструменты не помогли или вернули пустой результат. Ответь на исходный вопрос на основе своих знаний о законодательстве РФ. Если сомневаешься в точности — добавь оговорку, что нужно проверить в актуальной редакции.",
+    });
+    const fallback = await streamChat(
+      messages,
+      {
+        onToken: callbacks.onToken,
+        onDone: () => {},
+        onError: callbacks.onError,
+      },
+      signal,
+      [],
+    );
+    accumulatedText = fallback.text;
+  }
+
   callbacks.onDone(accumulatedText);
   return accumulatedText;
 }
