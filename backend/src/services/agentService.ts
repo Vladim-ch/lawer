@@ -3,18 +3,14 @@ import {
   streamChat,
   chatCompletion,
   LlmMessage,
+  LlmToolCall,
 } from "./llmService";
-import { callTool, getAvailableTools } from "./mcpClient";
+import { callTool, getToolSchemas } from "./mcpClient";
 import { saveGeneratedDocument } from "./documentService";
 import { env } from "../config/env";
 
-/** Tools that produce downloadable files */
+/** Tools whose results include a generated file we should store in MinIO */
 const FILE_PRODUCING_TOOLS = new Set(["generate_docx", "fill_template"]);
-
-// Matches both properly closed <tool_call>...</tool_call> and the common
-// case where the model forgets the closing tag — we take the JSON object
-// up to and including its matching closing brace.
-const TOOL_CALL_REGEX = /<tool_call>\s*(\{[\s\S]*?\})\s*(?:<\/tool_call>|$)/;
 
 export interface AgentStreamCallbacks {
   onToken: (token: string) => void;
@@ -25,90 +21,88 @@ export interface AgentStreamCallbacks {
   onError: (error: Error) => void;
 }
 
-interface ParsedToolCall {
-  tool: string;
-  arguments: Record<string, unknown>;
+/**
+ * Extract MCP `content` blocks into a compact JSON string suitable for
+ * feeding back to the LLM as the `tool` message content.
+ *
+ * Some tools (list_templates) return large JSON that blows out the context
+ * when fed back verbatim on CPU-only inference. We compact those payloads
+ * here so the LLM can still produce a useful answer quickly.
+ */
+function serializeToolResult(toolName: string, result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return JSON.stringify(result ?? null);
+  }
+  const r = result as { content?: Array<{ type: string; text: string }>; isError?: boolean };
+
+  let text = "";
+  if (Array.isArray(r.content)) {
+    text = r.content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+  }
+  if (!text) {
+    text = JSON.stringify(result);
+  }
+
+  if (toolName === "list_templates" && !r.isError) {
+    try {
+      const parsed = JSON.parse(text);
+      const templates = Array.isArray(parsed?.templates) ? parsed.templates : [];
+      const compact = templates.map((t: { id: string; name: string; category: string; parameters?: Array<{ name: string }> }) => ({
+        id: t.id,
+        name: t.name,
+        category: t.category,
+        parameter_names: Array.isArray(t.parameters) ? t.parameters.map((p) => p.name) : [],
+      }));
+      return JSON.stringify({ templates: compact, count: compact.length });
+    } catch {
+      // fall through and return the raw text
+    }
+  }
+
+  return text;
 }
 
-function parseToolCall(text: string): ParsedToolCall | null {
-  const match = text.match(TOOL_CALL_REGEX);
-  if (!match) return null;
+async function maybeEmitFile(
+  toolName: string,
+  toolResult: unknown,
+  userId: string,
+  onFile: (documentId: string, filename: string) => void,
+): Promise<void> {
+  if (!FILE_PRODUCING_TOOLS.has(toolName)) return;
+  if (!toolResult || typeof toolResult !== "object") return;
+  const r = toolResult as {
+    content?: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  };
+  if (r.isError) return;
 
   try {
-    const parsed = JSON.parse(match[1]);
-    if (typeof parsed.tool === "string" && parsed.arguments) {
-      return { tool: parsed.tool, arguments: parsed.arguments };
+    const textContent = r.content?.find((c) => c.type === "text");
+    if (!textContent) return;
+    const parsed = JSON.parse(textContent.text);
+    if (parsed.base64 && parsed.filename) {
+      const fileType = parsed.filename.split(".").pop()?.toLowerCase() || "docx";
+      const doc = await saveGeneratedDocument(userId, parsed.filename, parsed.base64, fileType);
+      onFile(doc.id, doc.filename);
     }
-  } catch {
-    // malformed JSON in tool call
+  } catch (err) {
+    console.warn("[Agent] Failed to save generated file:", (err as Error).message);
   }
-  return null;
 }
 
 /**
- * Remove the tool_call tag from response text, returning the clean portion.
- */
-function stripToolCall(text: string): string {
-  // Strip properly closed tags AND dangling <tool_call>...(eof) without
-  // closing tag (qwen2.5 sometimes omits it).
-  return text
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-    .replace(/<tool_call>[\s\S]*$/g, "")
-    .trim();
-}
-
-/**
- * Streaming filter that hides `<tool_call>...</tool_call>` blocks from the
- * token stream reaching the client. Handles tags split across chunks by
- * holding back a small tail buffer.
- */
-function createToolCallFilter(emit: (t: string) => void) {
-  const OPEN = "<tool_call>";
-  const CLOSE = "</tool_call>";
-  let buf = "";
-  let inside = false;
-  return {
-    push(chunk: string) {
-      buf += chunk;
-      while (buf.length > 0) {
-        if (inside) {
-          const ci = buf.indexOf(CLOSE);
-          if (ci === -1) {
-            buf = buf.slice(Math.max(0, buf.length - (CLOSE.length - 1)));
-            return;
-          }
-          buf = buf.slice(ci + CLOSE.length);
-          inside = false;
-          continue;
-        }
-        const oi = buf.indexOf(OPEN);
-        if (oi === -1) {
-          const safeLen = Math.max(0, buf.length - (OPEN.length - 1));
-          if (safeLen > 0) {
-            emit(buf.slice(0, safeLen));
-            buf = buf.slice(safeLen);
-          }
-          return;
-        }
-        if (oi > 0) emit(buf.slice(0, oi));
-        buf = buf.slice(oi + OPEN.length);
-        inside = true;
-      }
-    },
-    flush() {
-      if (!inside && buf.length > 0) emit(buf);
-      buf = "";
-      inside = false;
-    },
-  };
-}
-
-/**
- * Run the ReAct agent loop:
- * 1. Stream LLM response to user
- * 2. If response contains <tool_call>, execute it via MCP
- * 3. Feed result back to LLM, repeat (up to maxToolIterations)
- * 4. Final response is streamed to user
+ * ReAct-style agent loop using Ollama's native tool-calling API.
+ *
+ * 1. Send history + tools to Ollama and stream the response.
+ * 2. If the response contains structured tool_calls, execute each one
+ *    via MCP, append the assistant turn and a `tool` message with the
+ *    result, and loop (non-streaming for middle iterations, streaming
+ *    again on the final answer).
+ * 3. Stop when the model returns text without tool_calls, or after
+ *    `maxToolIterations`.
  */
 export async function runAgent(
   history: Array<{ role: string; content: string }>,
@@ -117,131 +111,113 @@ export async function runAgent(
   signal?: AbortSignal,
 ): Promise<string> {
   const messages = buildMessages(history);
-  const availableTools = getAvailableTools();
-  let fullResponse = "";
+  const tools = await getToolSchemas().catch((err) => {
+    console.warn("[Agent] Could not load tool schemas:", (err as Error).message);
+    return [];
+  });
+
+  let accumulatedText = "";
   let iteration = 0;
 
-  // First iteration: stream to user, but hide any <tool_call>...</tool_call>
-  // segments so the client never sees the raw tag in the chat bubble.
-  const firstFilter = createToolCallFilter(callbacks.onToken);
-  const firstResponse = await streamChat(
+  // Iteration 0: stream first response to user
+  const first = await streamChat(
     messages,
     {
-      onToken: (t) => firstFilter.push(t),
+      onToken: callbacks.onToken,
       onDone: () => {},
       onError: callbacks.onError,
     },
     signal,
+    tools,
   );
-  firstFilter.flush();
 
-  fullResponse = firstResponse;
+  accumulatedText = first.text;
+  let pending = first.toolCalls;
 
-  // Check for tool calls in the streamed response
-  let toolCall = parseToolCall(fullResponse);
-
-  while (toolCall && iteration < env.llm.maxToolIterations) {
+  while (pending.length > 0 && iteration < env.llm.maxToolIterations) {
     iteration++;
 
-    // Validate tool name
-    if (!availableTools.includes(toolCall.tool)) {
-      const errorMsg = `\n\n*Инструмент "${toolCall.tool}" не найден.*`;
-      callbacks.onToken(errorMsg);
-      fullResponse = stripToolCall(fullResponse) + errorMsg;
-      break;
-    }
-
-    callbacks.onToolCall(toolCall.tool, toolCall.arguments);
-
-    // Execute MCP tool
-    let toolResult: unknown;
-    try {
-      toolResult = await callTool(toolCall.tool, toolCall.arguments);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      toolResult = { error: errorMsg };
-    }
-
-    callbacks.onToolResult(toolCall.tool, toolResult);
-
-    // If the tool produces a file, save it to MinIO and emit file event
-    if (FILE_PRODUCING_TOOLS.has(toolCall.tool) && toolResult && !(toolResult as any)?.error) {
-      try {
-        const result = toolResult as { content?: Array<{ type: string; text: string }> };
-        const textContent = result?.content?.find((c) => c.type === "text");
-        if (textContent) {
-          const parsed = JSON.parse(textContent.text);
-          if (parsed.base64 && parsed.filename) {
-            const fileType = parsed.filename.split(".").pop()?.toLowerCase() || "docx";
-            const doc = await saveGeneratedDocument(userId, parsed.filename, parsed.base64, fileType);
-            callbacks.onFile(doc.id, doc.filename);
-          }
-        }
-      } catch (err) {
-        console.warn("[Agent] Failed to save generated file:", (err as Error).message);
-      }
-    }
-
-    // Add assistant response (with tool call) and tool result to messages
+    // Record the assistant turn that invoked tool_calls, then execute each.
     messages.push({
       role: "assistant",
-      content: fullResponse,
-    });
-    messages.push({
-      role: "user",
-      content: `Результат вызова инструмента ${toolCall.tool}:\n\`\`\`json\n${JSON.stringify(toolResult, null, 2)}\n\`\`\``,
+      content: accumulatedText,
+      tool_calls: pending.map((tc) => ({
+        id: tc.id,
+        function: { name: tc.name, arguments: tc.arguments },
+      })),
     });
 
-    // Check if this is the last iteration — stream, otherwise use completion
-    if (iteration >= env.llm.maxToolIterations) {
-      // Last iteration: stream final response (still filter tool_call in case
-      // the model emits one after hitting the iteration cap).
-      const lastFilter = createToolCallFilter(callbacks.onToken);
-      const finalResponse = await streamChat(
+    for (const tc of pending) {
+      callbacks.onToolCall(tc.name, tc.arguments);
+
+      let toolResult: unknown;
+      try {
+        toolResult = await callTool(tc.name, tc.arguments);
+      } catch (err) {
+        toolResult = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      callbacks.onToolResult(tc.name, toolResult);
+      await maybeEmitFile(tc.name, toolResult, userId, callbacks.onFile);
+
+      messages.push({
+        role: "tool",
+        tool_name: tc.name,
+        content: serializeToolResult(tc.name, toolResult),
+      });
+    }
+
+    const isLastIteration = iteration >= env.llm.maxToolIterations;
+
+    if (isLastIteration) {
+      // Final allowed turn — stream to the user with tools disabled so the
+      // model must answer in prose (prevents runaway tool loops).
+      const finalFilter = createTextOnlyBridge(callbacks.onToken);
+      const last = await streamChat(
         messages,
         {
-          onToken: (t) => lastFilter.push(t),
+          onToken: (t) => finalFilter(t),
           onDone: () => {},
           onError: callbacks.onError,
         },
         signal,
+        [],
       );
-      lastFilter.flush();
-      fullResponse = stripToolCall(fullResponse) + "\n\n" + stripToolCall(finalResponse);
+      accumulatedText = accumulatedText
+        ? accumulatedText + "\n\n" + last.text
+        : last.text;
+      pending = [];
       break;
     }
 
-    // Middle iteration: non-streaming for speed, check for more tool calls
-    const nextResponse = await chatCompletion(messages, signal);
-    const nextToolCall = parseToolCall(nextResponse);
+    // Middle iteration: non-streaming so we don't emit intermediate
+    // reasoning text piecemeal; we'll stream only the final answer.
+    const next = await chatCompletion(messages, signal, tools);
+    pending = next.toolCalls;
 
-    if (nextToolCall) {
-      // More tool calls — continue loop without streaming
-      fullResponse = nextResponse;
-      toolCall = nextToolCall;
-      continue;
+    if (pending.length === 0) {
+      // No more tools — stream this text out as a batch for the client.
+      for (let i = 0; i < next.text.length; i += 20) {
+        callbacks.onToken(next.text.slice(i, i + 20));
+      }
+      accumulatedText = accumulatedText
+        ? accumulatedText + "\n\n" + next.text
+        : next.text;
+    } else {
+      // Will loop again — don't emit tokens for this turn, only record.
+      accumulatedText = next.text || accumulatedText;
     }
-
-    // No more tool calls — stream this final response to user
-    // We already have the text, send it as tokens
-    const cleanPrevious = stripToolCall(fullResponse);
-    const separator = cleanPrevious ? "\n\n" : "";
-    if (separator) callbacks.onToken(separator);
-
-    // Send the non-streamed response as a batch of tokens, filtering tool_call
-    // tags in case the model emitted one despite us not continuing the loop.
-    const batchFilter = createToolCallFilter(callbacks.onToken);
-    for (let i = 0; i < nextResponse.length; i += 20) {
-      batchFilter.push(nextResponse.slice(i, i + 20));
-    }
-    batchFilter.flush();
-
-    fullResponse = (cleanPrevious ? cleanPrevious + separator : "") + stripToolCall(nextResponse);
-    toolCall = null;
   }
 
-  // Clean up any remaining tool_call tags from the final response
-  const cleanResponse = stripToolCall(fullResponse) || fullResponse;
-  callbacks.onDone(cleanResponse);
-  return cleanResponse;
+  callbacks.onDone(accumulatedText);
+  return accumulatedText;
+}
+
+/**
+ * Pass-through text emitter. Kept as a function for parity with the old
+ * XML-tag filter so future token-side filtering (e.g. PII redaction) can
+ * be added in one place.
+ */
+function createTextOnlyBridge(emit: (t: string) => void) {
+  return (chunk: string) => emit(chunk);
 }

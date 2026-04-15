@@ -1,14 +1,26 @@
 import { env } from "../config/env";
 import { SYSTEM_PROMPT } from "../config/systemPrompt";
+import type { OllamaToolSchema } from "./mcpClient";
+
+export interface LlmToolCall {
+  id?: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
 
 export interface LlmMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: Array<{
+    id?: string;
+    function: { name: string; arguments: Record<string, unknown> };
+  }>;
+  tool_name?: string;
 }
 
 export interface LlmStreamCallbacks {
   onToken: (token: string) => void;
-  onDone: (fullText: string) => void;
+  onDone: (fullText: string, toolCalls: LlmToolCall[]) => void;
   onError: (error: Error) => void;
 }
 
@@ -35,20 +47,32 @@ export function buildMessages(
   return messages;
 }
 
+function serializeMessage(msg: LlmMessage): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    role: msg.role === "tool" ? "tool" : msg.role,
+    content: msg.content,
+  };
+  if (msg.tool_calls) base.tool_calls = msg.tool_calls;
+  if (msg.tool_name) base.name = msg.tool_name;
+  return base;
+}
+
 /**
- * Stream a chat completion from Ollama.
- * Returns the full response text when done.
+ * Stream a chat completion from Ollama. When `tools` are provided the model
+ * may respond with structured tool_calls instead of (or alongside) text —
+ * those are collected and passed to onDone/returned.
  */
 export async function streamChat(
   messages: LlmMessage[],
   callbacks: LlmStreamCallbacks,
   signal?: AbortSignal,
-): Promise<string> {
+  tools?: OllamaToolSchema[],
+): Promise<{ text: string; toolCalls: LlmToolCall[] }> {
   const url = `${env.llm.ollamaUrl}/api/chat`;
 
-  const body = {
+  const body: Record<string, unknown> = {
     model: env.llm.ollamaModel,
-    messages,
+    messages: messages.map(serializeMessage),
     stream: true,
     keep_alive: -1,
     options: {
@@ -57,6 +81,7 @@ export async function streamChat(
       num_predict: env.llm.numPredict,
     },
   };
+  if (tools && tools.length) body.tools = tools;
 
   let response: Response;
   try {
@@ -88,6 +113,7 @@ export async function streamChat(
   }
 
   let fullText = "";
+  const toolCalls: LlmToolCall[] = [];
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
@@ -100,7 +126,6 @@ export async function streamChat(
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Ollama streams newline-delimited JSON
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -109,16 +134,28 @@ export async function streamChat(
 
         try {
           const chunk = JSON.parse(line);
+          const msg = chunk.message;
 
-          if (chunk.message?.content) {
-            const token = chunk.message.content;
-            fullText += token;
-            callbacks.onToken(token);
+          if (msg?.content) {
+            fullText += msg.content;
+            callbacks.onToken(msg.content);
+          }
+
+          if (Array.isArray(msg?.tool_calls)) {
+            for (const tc of msg.tool_calls) {
+              if (tc?.function?.name) {
+                toolCalls.push({
+                  id: tc.id,
+                  name: tc.function.name,
+                  arguments: tc.function.arguments ?? {},
+                });
+              }
+            }
           }
 
           if (chunk.done) {
-            callbacks.onDone(fullText);
-            return fullText;
+            callbacks.onDone(fullText, toolCalls);
+            return { text: fullText, toolCalls };
           }
         } catch {
           // Skip malformed JSON lines
@@ -126,26 +163,27 @@ export async function streamChat(
       }
     }
 
-    // If we exited the loop without a done signal
-    callbacks.onDone(fullText);
-    return fullText;
+    callbacks.onDone(fullText, toolCalls);
+    return { text: fullText, toolCalls };
   } finally {
     reader.releaseLock();
   }
 }
 
 /**
- * Non-streaming chat completion (for tool-use iterations).
+ * Non-streaming completion — used for tool-result iterations where we do
+ * not need to relay tokens to the client in real time.
  */
 export async function chatCompletion(
   messages: LlmMessage[],
   signal?: AbortSignal,
-): Promise<string> {
+  tools?: OllamaToolSchema[],
+): Promise<{ text: string; toolCalls: LlmToolCall[] }> {
   const url = `${env.llm.ollamaUrl}/api/chat`;
 
-  const body = {
+  const body: Record<string, unknown> = {
     model: env.llm.ollamaModel,
-    messages,
+    messages: messages.map(serializeMessage),
     stream: false,
     keep_alive: -1,
     options: {
@@ -154,6 +192,7 @@ export async function chatCompletion(
       num_predict: env.llm.numPredict,
     },
   };
+  if (tools && tools.length) body.tools = tools;
 
   const response = await fetch(url, {
     method: "POST",
@@ -168,14 +207,19 @@ export async function chatCompletion(
   }
 
   const data = await response.json();
-  return data.message?.content || "";
+  const msg = data.message ?? {};
+  const toolCalls: LlmToolCall[] = Array.isArray(msg.tool_calls)
+    ? msg.tool_calls.map((tc: { id?: string; function: { name: string; arguments?: Record<string, unknown> } }) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments ?? {},
+      }))
+    : [];
+  return { text: msg.content ?? "", toolCalls };
 }
 
 /**
  * Warm up Ollama: load model and populate KV cache for the system prompt.
- * CPU-only prompt eval of 2–3k-token system prompt takes minutes cold;
- * prefix caching makes subsequent requests fast, so we pay that cost once
- * on startup (fire-and-forget, non-blocking).
  */
 export async function warmUp(): Promise<void> {
   const url = `${env.llm.ollamaUrl}/api/chat`;

@@ -226,6 +226,99 @@ export function getAvailableTools(): string[] {
   return Object.keys(TOOL_SERVER_MAP);
 }
 
+export interface OllamaToolSchema {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+let toolSchemaCache: OllamaToolSchema[] | null = null;
+
+/**
+ * Tools callable via MCP internally but never exposed to the LLM's tool
+ * list. parse_document is handled by the backend on upload; exposing it
+ * makes small models try to re-parse already-extracted attachments.
+ */
+const INTERNAL_ONLY_TOOLS = new Set<string>(["parse_document"]);
+
+/**
+ * MCP tool descriptions are written for humans and often include multiple
+ * examples; on CPU inference each extra token in the tool schema costs a
+ * fraction of a second of prompt eval time, per request. Keep descriptions
+ * to one short sentence.
+ */
+function compactDescription(desc: string): string {
+  const firstSentence = desc.split(/(?<=[.!?])\s/)[0] ?? desc;
+  return firstSentence.trim().slice(0, 140);
+}
+
+/**
+ * Strip verbose `description`, `examples`, and `default` fields from
+ * parameter schemas — they bloat the prompt without helping tool routing.
+ */
+function compactParameters(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!schema || typeof schema !== "object") {
+    return { type: "object", properties: {} };
+  }
+  const copy: Record<string, unknown> = { ...schema };
+  const props = (copy.properties as Record<string, Record<string, unknown>> | undefined) ?? {};
+  const slimProps: Record<string, Record<string, unknown>> = {};
+  for (const [name, def] of Object.entries(props)) {
+    const keep: Record<string, unknown> = {};
+    if (def.type) keep.type = def.type;
+    if (def.enum) keep.enum = def.enum;
+    if (def.items) keep.items = def.items;
+    if (typeof def.description === "string") {
+      keep.description = (def.description as string).split(/\.\s/)[0].slice(0, 80);
+    }
+    slimProps[name] = keep;
+  }
+  copy.properties = slimProps;
+  return copy;
+}
+
+/**
+ * Fetch tool schemas from every MCP server and cache them in the format
+ * Ollama expects on /api/chat `tools`. Cached indefinitely — restart the
+ * backend to pick up new tools.
+ */
+export async function getToolSchemas(): Promise<OllamaToolSchema[]> {
+  if (toolSchemaCache) return toolSchemaCache;
+
+  const serverNames = Array.from(new Set(Object.values(TOOL_SERVER_MAP)));
+  const schemas: OllamaToolSchema[] = [];
+
+  for (const serverName of serverNames) {
+    try {
+      const server = getOrSpawnServer(serverName);
+      await ensureInitialized(server);
+      const listResult = (await sendRequest(server, "tools/list", {})) as {
+        tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
+      };
+      for (const tool of listResult?.tools ?? []) {
+        if (!TOOL_SERVER_MAP[tool.name]) continue;
+        if (INTERNAL_ONLY_TOOLS.has(tool.name)) continue;
+        schemas.push({
+          type: "function",
+          function: {
+            name: tool.name,
+            description: compactDescription(tool.description ?? ""),
+            parameters: compactParameters(tool.inputSchema),
+          },
+        });
+      }
+    } catch (err) {
+      console.warn(`[MCP] Failed to list tools for ${serverName}:`, (err as Error).message);
+    }
+  }
+
+  toolSchemaCache = schemas;
+  return schemas;
+}
+
 /**
  * Shutdown all running MCP servers gracefully.
  */
