@@ -31,6 +31,10 @@ const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  // Authenticated endpoints — key by userId so a team behind a single
+  // NAT/VPN does not share one bucket. Falls back to IP when called
+  // before auth middleware somehow populates req.user.
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? "anon",
   message: { error: "Слишком много запросов, попробуйте позже" },
 });
 

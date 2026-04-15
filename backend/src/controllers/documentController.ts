@@ -2,13 +2,40 @@ import { Request, Response, NextFunction } from "express";
 import * as documentService from "../services/documentService";
 import { AppError } from "../middleware/errorHandler";
 
+/**
+ * Multer decodes the multipart filename field as latin1, so a UTF-8
+ * filename like "Договор.docx" arrives as mojibake (each Cyrillic byte
+ * shows up as a 0x80-0xFF latin1 char). Re-interpret those bytes as
+ * UTF-8 only when the string looks like mojibake — if the name already
+ * contains real non-BMP-latin1 chars (U+0100+) or only ASCII, leave it
+ * alone. This avoids double-decoding filenames from modern browsers
+ * that already send proper UTF-8 in multipart.
+ */
+function fixMulterFilename(name: string): string {
+  let hasHighLatin1 = false;
+  for (let i = 0; i < name.length; i++) {
+    const code = name.charCodeAt(i);
+    if (code >= 0x100) return name; // real UTF-8 char already decoded
+    if (code >= 0x80) hasHighLatin1 = true;
+  }
+  if (!hasHighLatin1) return name;
+  try {
+    const decoded = Buffer.from(name, "latin1").toString("utf8");
+    // Guard: if re-decoding produced replacement chars, the original
+    // was not mojibake — keep the original bytes.
+    if (decoded.includes("\uFFFD")) return name;
+    return decoded;
+  } catch {
+    return name;
+  }
+}
+
 export async function upload(req: Request, res: Response, next: NextFunction) {
   try {
     if (!req.file) {
       throw new AppError(400, "Файл не прикреплён");
     }
-    // Multer decodes Content-Disposition filename as latin1; re-decode as UTF-8
-    req.file.originalname = Buffer.from(req.file.originalname, "latin1").toString("utf8");
+    req.file.originalname = fixMulterFilename(req.file.originalname);
     const doc = await documentService.uploadDocument(req.user!.userId, req.file);
     res.status(201).json(doc);
   } catch (err) {

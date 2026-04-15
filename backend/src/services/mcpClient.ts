@@ -29,6 +29,7 @@ interface McpServer {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MiB safety cap per server
 
 const servers = new Map<string, McpServer>();
 
@@ -90,6 +91,17 @@ function spawnServer(name: string): McpServer {
   child.stdout!.on("data", (chunk: Buffer) => {
     server.buffer += chunk.toString();
 
+    // Safety valve: a misbehaving MCP server that writes a lot without a
+    // newline would otherwise grow this buffer without bound. Drop the
+    // accumulated fragment and keep going — better than an OOM.
+    if (server.buffer.length > MAX_BUFFER_BYTES) {
+      console.error(
+        `[MCP:${name}] stdout buffer exceeded ${MAX_BUFFER_BYTES} bytes without a newline; discarding`,
+      );
+      server.buffer = "";
+      return;
+    }
+
     // MCP uses newline-delimited JSON-RPC over stdio
     const lines = server.buffer.split("\n");
     server.buffer = lines.pop() || "";
@@ -124,6 +136,8 @@ function spawnServer(name: string): McpServer {
   child.on("exit", (code) => {
     console.error(`[MCP:${name}] exited with code ${code}`);
     servers.delete(name);
+    server.ready = false;
+    server.buffer = "";
     // Reject all pending requests
     for (const [id, pending] of server.pending) {
       clearTimeout(pending.timer);
@@ -185,12 +199,24 @@ async function ensureInitialized(server: McpServer): Promise<void> {
     clientInfo: { name: "lawer-backend", version: "0.1.0" },
   });
 
-  // Send initialized notification (no id, but we use request for simplicity)
+  // Send initialized notification. The child may have died between the
+  // initialize response and this write — catch the EPIPE explicitly so
+  // `ready` stays false and the next call respawns instead of hanging
+  // for REQUEST_TIMEOUT_MS on a dead pipe.
   const notification = JSON.stringify({
     jsonrpc: "2.0",
     method: "notifications/initialized",
   }) + "\n";
-  server.process.stdin!.write(notification);
+  await new Promise<void>((resolve, reject) => {
+    server.process.stdin!.write(notification, (err) => {
+      if (err) {
+        server.ready = false;
+        reject(new Error(`Failed to send initialized notification to ${server.name}: ${err.message}`));
+        return;
+      }
+      resolve();
+    });
+  });
 
   server.ready = true;
 }

@@ -11,6 +11,10 @@ const messageLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  // Key by authenticated userId so a whole team behind a single NAT/VPN
+  // doesn't share one 10/min bucket. authMiddleware runs before this,
+  // so req.user is always populated; fall back to IP just in case.
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? "anon",
   message: { error: "Слишком много сообщений, подождите минуту" },
 });
 
