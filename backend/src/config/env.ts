@@ -48,9 +48,15 @@ export const env = {
   },
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:4000",
   llm: {
-    provider: process.env.LLM_PROVIDER || "ollama",
+    provider: (process.env.LLM_PROVIDER || "ollama") as "ollama" | "anthropic",
+    // Ollama (local fallback)
     ollamaUrl: process.env.OLLAMA_URL || "http://ollama:11434",
     ollamaModel: process.env.OLLAMA_MODEL || "qwen2.5:7b",
+    // Anthropic (cloud — preferred for quality)
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
+    anthropicModel: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+    anthropicMaxTokens: parseInt(process.env.ANTHROPIC_MAX_TOKENS || "4096", 10),
+    // Shared
     maxContext: parseInt(process.env.LLM_MAX_CONTEXT || "20", 10),
     temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.3"),
     numCtx: parseInt(process.env.LLM_NUM_CTX || "16384", 10),
